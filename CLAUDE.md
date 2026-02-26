@@ -6,35 +6,39 @@ Weekly planner — 7-column grid with Someday backlog. Flask service on port 500
 
 ## Architecture
 
-- `app.py` — Flask routes + auth
+- `app.py` — Flask routes + auth, calls `init_db()` at startup
 - `config.py` — env-backed config (vault path, PIN hash, secret key)
-- `daemons/auth.py` — PIN auth (shared pattern with Quanta/duo-brain)
-- `daemons/weekplan.py` — all task CRUD, markdown parse/build
-- `templates/index.html` — full week UI (SortableJS drag, Trello-style card panel)
+- `daemons/auth.py` — PIN auth (shared pattern with duo-brain)
+- `daemons/weekplan.py` — all task CRUD against SQLite
+- `migrate.py` — one-time import of legacy markdown week files into DB
+- `templates/index.html` — full week UI (SortableJS drag, card panel)
 - `templates/base.html` — base layout (JetBrains Mono, purple accent #b967ff, scanlines)
 - `templates/login.html` — PIN keypad
 - `static/css/style.css` — self-contained styles (purple theme, responsive)
 - `static/icons/athena.svg` — pixel-art owl favicon
 
-## Vault Storage
+## Storage
 
-- Weekly files: `vault/Journals/Weekly/YYYY-WXX.md`
-- Recurring tasks: `vault/Projects/Quanta/Templates/WeeklyRecurring.md`
+**Database:** `data/athena.db` (SQLite, WAL mode)
 
-### Markdown format
+```sql
+tasks (
+    id           TEXT PRIMARY KEY,   -- UUID4
+    week_monday  TEXT NOT NULL,       -- ISO date of the week's Monday
+    section      TEXT NOT NULL,       -- 'Monday'…'Sunday' or 'Someday'
+    position     INTEGER NOT NULL,    -- 0-based order within section
+    text         TEXT NOT NULL,
+    checked      INTEGER DEFAULT 0,
+    recur        TEXT,                -- 'daily', 'every 2 weeks', 'every Mon', etc.
+    attachment   TEXT,
+    note         TEXT,
+    created_at   TEXT NOT NULL,
+    completed_at TEXT                 -- set when checked, cleared when unchecked
+)
 ```
-# Week 9 — Feb 23–Mar 1
 
-## Monday
-- [ ] Task text [recur:daily][attach:file.md]
-  Optional note line here
-- [x] Completed task
-
-## Someday
-- [ ] Backlog item
-```
-
-Notes stored as 2-space indented lines after the task. Carry forward on new week: recurring tasks + uncompleted Someday items.
+**Global recurring tasks:** `vault/Projects/Quanta/Templates/WeeklyRecurring.md`
+Read-only markdown list, shown in every day column as ghost indicators.
 
 ## API Routes
 
@@ -49,38 +53,44 @@ Notes stored as 2-space indented lines after the task. Carry forward on new week
 | POST | `/api/week/rename` | Rename task text |
 | POST | `/api/week/defer` | Defer to tomorrow/next_week/someday |
 | POST | `/api/week/duplicate` | Duplicate task |
-| POST | `/api/week/attach` | Attach file |
+| POST | `/api/week/attach` | Attach file reference |
 | POST | `/api/week/reorder` | Reorder section |
 
 ## UI — Key Patterns
 
-### Card Panel (Trello-style)
-Clicking a task text opens a right-side panel (bottom sheet on mobile) with:
-- Editable task title (saves on blur/Enter via `/api/week/rename`)
-- Notes textarea (saves on blur or before any action)
-- Recurring pills: None / Daily / Weekly / Weekdays / Biweekly / Monthly / Annually / Custom…
-- Custom recur: inline `Every [N] [days/weeks/months/years/Sun…Sat]` form
-- Defer to: Tomorrow / Next week / Someday
-- Duplicate / Attach / Delete actions
+### Card Panel
+Clicking a task opens a right-side panel (bottom sheet on mobile):
+- Editable title (saves on blur/Enter via `/api/week/rename`)
+- Notes textarea (saves on blur or before any mutating action)
+- Recurrence pills + custom `Every [N] [unit]` inline form
+- Defer / Duplicate / Attach / Delete
 
-`saveCardChanges()` is always awaited before any mutating action to prevent race conditions between note/title saves and API calls.
+`saveCardChanges()` (note + title) is always awaited before any API mutation. `closeCardPanel()` is async for the same reason — it saves before clearing `activeCard`, otherwise the blur fires after the card is null and the save is skipped.
 
-After `loadWeek` rebuilds the DOM, `renderWeek` re-opens the card panel for the same task via `savedCard` (matching on `section` + `section_idx`).
+After `loadWeek` rebuilds the DOM, `renderWeek` re-opens the card for the same task via `savedCard` (matched on `section` + `section_idx`).
 
 ### Task Identification
-Tasks are identified by `section_idx` (0-based position within their section), NOT file line numbers. Line numbers shift when notes are added/removed; section position is stable.
+Tasks are referenced by `section_idx` (0-based position in section) in the API. The DB uses UUIDs internally; `_get_task_by_idx` maps index → UUID by ordering on `position`.
 
 ### Session Expiry
-`fetchApi()` wraps `fetch()` and detects when a 302 redirects to `/login` (`res.redirected && res.url.includes('/login')`), then redirects the whole page.
+`fetchApi()` wraps `fetch()` and detects 302 redirects to `/login`, then redirects the whole page. Without this, expired sessions fail silently — `fetch()` follows the redirect, gets HTML, and `res.json()` throws.
 
 ### Drag-and-Drop
-SortableJS with `handle: '.wp-drag-handle'` — drag only activates on the `⋮` grip, leaving clicks on task text free to open the card panel. Handle is hidden on mobile.
+SortableJS with `handle: '.wp-drag-handle'` — drag only activates on the grip element. Handle is hidden on mobile (touch users can't drag anyway).
 
 ### Collapse Day Columns
-Each day header has an eye button (`◉`). Click toggles `.collapsed` on the day column. Desktop: column shrinks to 26px with rotated day name (via `updateGridColumns()` which sets `grid-template-columns` dynamically). State persisted in `localStorage` key `athena-collapsed-days`.
+Eye button (`◉`) in each day header toggles `.collapsed`. Desktop: `updateGridColumns()` sets `grid-template-columns` dynamically (CSS grid `1fr` can't be individually overridden without JS). State persisted in `localStorage['athena-collapsed-days']`.
 
 ### Enter → Next Column
-After adding a task with Enter, `pendingFocusSection` is set to the next day. `renderWeek` focuses that section's add input after DOM rebuild.
+`pendingFocusSection` is set on Enter keydown. After `renderWeek` rebuilds the DOM, it focuses that section's add input.
+
+## Carry-Forward Logic
+
+When a new week is first accessed, `get_or_create_week` queries the previous week's Monday and copies:
+- All unchecked tasks with a `recur` value (any section)
+- All unchecked Someday tasks
+
+Positions are renormalized after copy.
 
 ## Deploy
 
@@ -89,13 +99,13 @@ bash deploy/deploy-to-pi.sh
 ```
 
 Pi service: `/etc/systemd/system/athena.service`
-Pi path: `/opt/athena/`
+Pi app path: `/opt/athena/app/`
+Pi venv: `/opt/athena/venv/`
 Logs: `/opt/athena/logs/`
 
 ## Key Gotchas
 
+- `reorder_section` matches tasks by text (first match wins) — duplicate names in the same section will collide
 - SortableJS cross-column drag uses `group: 'week-tasks'` on all containers including Someday
-- `closeCardPanel()` is async — awaits `saveCardChanges()` before clearing `activeCard`; otherwise the blur event fires after `activeCard` is null and the note/title save is skipped
 - Someday container needs `data-date` and `data-section` set before SortableJS init
-- `reorder_section` matches by task text — duplicate text names in the same section will collide
-- Collapsed column width is set via JS (`updateGridColumns`), not CSS alone, because CSS grid `1fr` columns can't be individually sized without JS
+- `migrate.py` must be run from `/opt/athena/app/` on the Pi so `config` is importable

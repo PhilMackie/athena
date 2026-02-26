@@ -1,0 +1,818 @@
+/* Athena — Week Planner
+   Design system shared with Quanta */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+    --bg-primary:    #000000;
+    --bg-secondary:  #0a0a0a;
+    --bg-card:       #111111;
+    --accent:        #b967ff;
+    --text-primary:  #ffffff;
+    --text-secondary: #666666;
+    --border:        #333333;
+    --border-radius: 0;
+    --spacing:       16px;
+    --font-mono:     'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: var(--font-mono);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    line-height: 1.5;
+    font-size: 14px;
+}
+
+.container {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: var(--spacing);
+    padding-bottom: calc(var(--spacing) + env(safe-area-inset-bottom));
+}
+
+/* Scanlines overlay */
+.scanlines::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0,0,0,0.03) 0px,
+        rgba(0,0,0,0.03) 1px,
+        transparent 1px,
+        transparent 2px
+    );
+    pointer-events: none;
+    z-index: 9999;
+}
+
+/* Header / page header */
+.header {
+    text-align: center;
+    padding: var(--spacing) 0;
+    margin-bottom: var(--spacing);
+    border-bottom: 1px solid var(--border);
+}
+
+.header h1 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+}
+
+.header .subtitle {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.page-header {
+    position: relative;
+    margin-bottom: 20px;
+    padding: var(--spacing) 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.page-header h1 {
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--accent);
+}
+
+.logout-btn {
+    position: absolute;
+    top: var(--spacing);
+    right: 0;
+    padding: 8px 12px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 0.625rem;
+    font-family: var(--font-mono);
+    text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.logout-btn:hover,
+.logout-btn:active {
+    border-color: var(--text-primary);
+    color: var(--text-primary);
+}
+
+/* Status messages */
+.status {
+    padding: 12px;
+    margin-bottom: var(--spacing);
+    font-size: 0.75rem;
+}
+.status.success { color: var(--accent); border: 1px solid var(--accent); }
+.status.error   { color: #ff4136; border: 1px solid #ff4136; }
+.status.hidden  { display: none; }
+.hidden         { display: none !important; }
+
+/* Inputs (login form) */
+input[type="text"] {
+    width: 100%;
+    padding: 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    font-family: var(--font-mono);
+}
+input:focus { outline: none; border-color: var(--accent); }
+
+/* Terminal cursor blink */
+@keyframes cursor-blink {
+    0%, 50% { border-right-color: var(--accent); }
+    51%, 100% { border-right-color: transparent; }
+}
+input[type="text"]:focus {
+    border-right-width: 3px;
+    animation: cursor-blink 1s step-end infinite;
+}
+
+/* ── Login ──────────────────────────────────────────────────────────────── */
+
+.pin-display { margin: 32px 0; text-align: center; }
+
+.pin-dots { display: flex; justify-content: center; gap: 12px; }
+
+.dot {
+    width: 16px; height: 16px;
+    border: 2px solid var(--text-secondary);
+    border-radius: 50%;
+    transition: background 0.15s, border-color 0.15s;
+}
+.dot.filled { background: var(--accent); border-color: var(--accent); }
+
+.keypad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    max-width: 300px;
+    margin: 0 auto;
+}
+
+.key {
+    aspect-ratio: 1;
+    font-size: 1.75rem;
+    font-weight: 500;
+    background: var(--bg-card);
+    border: none;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: transform 0.1s, background 0.1s;
+    font-family: var(--font-mono);
+    -webkit-tap-highlight-color: transparent;
+}
+.key:active { transform: scale(0.95); background: var(--bg-secondary); }
+.key.clear  { color: #fbbf24; }
+.key.enter  { background: var(--accent); color: #000; font-size: 1.5rem; }
+.key:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.lockout-message {
+    text-align: center;
+    color: #ff4136;
+    margin-top: 24px;
+    font-size: 0.875rem;
+}
+
+/* ── Week Plan ──────────────────────────────────────────────────────────── */
+
+.week-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0 12px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.week-nav-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 1.125rem;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+    line-height: 1;
+}
+.week-nav-btn:hover, .week-nav-btn:active { border-color: var(--accent); color: var(--accent); }
+
+.week-info { text-align: center; }
+
+.week-dates {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.week-num-label {
+    display: block;
+    font-size: 0.5625rem;
+    color: var(--text-secondary);
+    letter-spacing: 0.2em;
+    margin-top: 2px;
+}
+
+/* Day grid — vertical stack on mobile, 7-col grid on desktop */
+.week-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding-bottom: 6px;
+}
+
+@media (min-width: 820px) {
+    .week-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        flex-direction: unset;
+        gap: 4px;
+    }
+}
+
+.day-col {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    display: flex;
+    flex-direction: column;
+}
+
+/* Mobile: flat sections, no card boxes */
+@media (max-width: 819px) {
+    .day-col {
+        border: none;
+        border-top: 3px solid #222;
+        background: transparent;
+    }
+    .day-col:first-child { border-top: none; }
+}
+
+.day-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 5px 7px;
+    background: var(--bg-secondary);
+    border-bottom: 2px solid transparent;
+    user-select: none;
+}
+
+/* Mobile: prominent section header */
+@media (max-width: 819px) {
+    .day-header {
+        padding: 20px 8px 6px;
+        background: transparent;
+        border-bottom: none;
+        align-items: baseline;
+        gap: 8px;
+    }
+    .day-col.today .day-header { border-bottom: none; }
+    .day-name {
+        font-size: 0.6875rem !important;
+        letter-spacing: 0.15em;
+        color: var(--text-secondary);
+    }
+    .day-col.today .day-name { color: var(--accent); }
+    .day-date-num {
+        font-size: 1.75rem !important;
+        font-weight: 700;
+        line-height: 1;
+        color: var(--text-secondary);
+    }
+    .day-col.today .day-date-num { color: var(--accent); }
+}
+
+.day-col.today .day-header { border-bottom-color: var(--accent); }
+.day-col.today .day-name,
+.day-col.today .day-date-num { color: var(--accent); }
+
+.wp-day-eye {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.5rem;
+    cursor: pointer;
+    padding: 0;
+    opacity: 0.3;
+    line-height: 1;
+    font-family: var(--font-mono);
+    flex-shrink: 0;
+    transition: opacity 0.15s;
+    margin-left: 2px;
+}
+.day-header:hover .wp-day-eye { opacity: 0.7; }
+.day-col.collapsed .wp-day-eye { opacity: 0.6; }
+
+/* Collapsed day column (desktop) */
+.day-col.collapsed .day-tasks,
+.day-col.collapsed .wp-task-add { display: none; }
+
+@media (min-width: 820px) {
+    .day-col.collapsed .day-header {
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        padding: 8px 4px;
+        gap: 6px;
+        height: 100%;
+    }
+    .day-col.collapsed .day-name {
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+        letter-spacing: 0.15em;
+    }
+    .day-col.collapsed .day-date-num { display: none; }
+}
+
+.day-name {
+    font-size: 0.5625rem;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.day-date-num {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+
+.day-tasks {
+    flex: 1;
+    padding: 3px 2px;
+    min-height: 50px;
+}
+
+@media (max-width: 819px) {
+    .day-tasks { padding: 0; min-height: 0; }
+}
+
+/* Task item */
+.wp-task-item {
+    display: flex;
+    flex-direction: column;
+    padding: 4px 5px;
+    position: relative;
+}
+
+.wp-task-item + .wp-task-item { border-top: 1px solid #111; }
+
+@media (max-width: 819px) {
+    .wp-task-item { padding: 13px 8px; }
+    .wp-task-item + .wp-task-item { border-top: 1px solid #181818; }
+}
+
+.wp-task-item.checked .wp-task-text {
+    text-decoration: line-through;
+    color: var(--text-secondary);
+    opacity: 0.6;
+}
+
+.wp-task-item.sortable-ghost { opacity: 0.3; background: #1a1a1a; }
+.wp-task-item.sortable-chosen { background: #151515; outline: 1px dashed var(--border); }
+
+.wp-task-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+/* Mobile: check on the right, hide drag handle */
+@media (max-width: 819px) {
+    .wp-task-row {
+        flex-direction: row-reverse;
+        align-items: center;
+        gap: 10px;
+    }
+    .wp-drag-handle { display: none; }
+}
+
+.wp-note-dot {
+    font-size: 0.75rem;
+    color: var(--accent);
+    opacity: 0.55;
+    margin-left: 3px;
+    vertical-align: middle;
+    line-height: 1;
+    pointer-events: none;
+}
+
+.wp-task-check {
+    width: 13px; height: 13px;
+    accent-color: var(--accent);
+    flex-shrink: 0;
+    cursor: pointer;
+    margin-top: 2px;
+}
+
+@media (max-width: 819px) {
+    .wp-task-check {
+        width: 18px; height: 18px;
+        margin-top: 0;
+        flex-shrink: 0;
+    }
+}
+
+.wp-task-text {
+    flex: 1;
+    font-size: 0.6875rem;
+    line-height: 1.45;
+    word-break: break-word;
+    cursor: pointer;
+    user-select: none;
+}
+
+@media (max-width: 819px) {
+    .wp-task-text { font-size: 1.25rem; line-height: 1.5; }
+}
+
+.wp-drag-handle {
+    cursor: grab;
+    color: #333;
+    font-size: 0.65rem;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+    user-select: none;
+    line-height: 1;
+    padding: 2px 1px 0;
+    letter-spacing: -1px;
+}
+
+.wp-task-item:hover .wp-drag-handle { opacity: 1; }
+
+@media (hover: none) { .wp-drag-handle { opacity: 0.4; } }
+
+/* Badges */
+.wp-recur-badge {
+    font-size: 0.5rem;
+    color: var(--accent);
+    opacity: 0.7;
+    margin-left: 3px;
+    letter-spacing: 0.05em;
+    vertical-align: super;
+}
+
+.wp-attach-badge {
+    font-size: 0.5625rem;
+    margin-left: 2px;
+    opacity: 0.6;
+    vertical-align: middle;
+}
+
+/* Global recurring items */
+.wp-recurring-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 5px;
+    opacity: 0.35;
+    font-style: italic;
+    user-select: none;
+    pointer-events: none;
+}
+
+.wp-recurring-icon { font-size: 0.5625rem; flex-shrink: 0; color: var(--text-secondary); }
+.wp-recurring-text { font-size: 0.625rem; color: var(--text-secondary); line-height: 1.4; }
+
+.wp-task-sep { height: 1px; background: #1c1c1c; margin: 2px 4px; }
+
+/* Add task input */
+.wp-task-add { padding: 3px 4px; border-top: 1px solid #111; }
+.wp-someday-add { padding: 3px 4px; border-top: 1px solid #111; }
+
+@media (max-width: 819px) {
+    .wp-task-add { padding: 4px 8px 10px; border-top: none; }
+}
+
+.wp-add-input {
+    width: 100%;
+    background: transparent;
+    border: none;
+    border-bottom: 1px dashed #222;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    padding: 3px 2px;
+    outline: none;
+    transition: border-color 0.15s, color 0.15s;
+    animation: none; /* Override cursor-blink for these inputs */
+}
+.wp-add-input::placeholder { color: #2a2a2a; }
+.wp-add-input:focus {
+    border-bottom-color: var(--accent);
+    color: var(--text-primary);
+    border-right: none;
+    animation: none;
+}
+
+/* Someday section */
+.wp-someday {
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    margin-bottom: 32px;
+}
+
+.wp-someday-header {
+    font-size: 0.5625rem;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    color: var(--text-secondary);
+    padding: 5px 8px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+}
+
+.wp-someday-tasks { padding: 3px 2px; min-height: 36px; }
+
+/* ── Card Panel ─────────────────────────────────────────────────────────── */
+
+#wp-card-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 300px;
+    height: 100vh;
+    background: #0c0c0c;
+    border-left: 1px solid var(--border);
+    padding: 0;
+    z-index: 500;
+    overflow-y: auto;
+    box-shadow: -10px 0 40px rgba(0,0,0,0.7);
+    display: flex;
+    flex-direction: column;
+}
+
+@media (max-width: 820px) {
+    #wp-card-panel {
+        top: auto;
+        bottom: 0;
+        right: 0;
+        left: 0;
+        width: 100%;
+        height: 65vh;
+        border-left: none;
+        border-top: 1px solid var(--border);
+        box-shadow: 0 -8px 40px rgba(0,0,0,0.7);
+    }
+}
+
+.wp-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 14px 14px 10px;
+    border-bottom: 1px solid #1a1a1a;
+    flex-shrink: 0;
+}
+
+.wp-card-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.4;
+    word-break: break-word;
+    flex: 1;
+    background: transparent;
+    border: none;
+    border-bottom: 1px dashed transparent;
+    outline: none;
+    font-family: var(--font-mono);
+    padding: 0;
+    width: 100%;
+    transition: border-color 0.15s;
+    animation: none;
+}
+.wp-card-title:hover { border-bottom-color: #333; }
+.wp-card-title:focus { border-bottom-color: var(--accent); border-right: none; animation: none; }
+@media (max-width: 819px) {
+    .wp-card-title { font-size: 1.25rem; }
+}
+
+.wp-card-close {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    flex-shrink: 0;
+    margin-top: 1px;
+    transition: color 0.15s;
+}
+.wp-card-close:hover { color: var(--text-primary); }
+
+.wp-card-section {
+    padding: 12px 14px;
+    border-bottom: 1px solid #161616;
+}
+
+.wp-card-actions {
+    border-bottom: none;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    margin-top: auto;
+}
+
+.wp-card-label {
+    font-size: 0.5rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 7px;
+}
+
+.wp-card-notes-input {
+    width: 100%;
+    background: transparent;
+    border: none;
+    border-left: 2px solid #222;
+    padding: 4px 8px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    line-height: 1.55;
+    resize: none;
+    outline: none;
+    min-height: 60px;
+    overflow: hidden;
+    display: block;
+    transition: border-color 0.15s, color 0.15s;
+    animation: none;
+}
+.wp-card-notes-input:focus {
+    color: var(--text-primary);
+    border-left-color: var(--accent);
+    border-right: none;
+}
+
+.wp-card-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.wp-card-pill {
+    background: transparent;
+    border: 1px solid #2a2a2a;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.5625rem;
+    letter-spacing: 0.06em;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.wp-card-pill:hover { border-color: var(--text-secondary); color: var(--text-primary); }
+.wp-card-pill.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+}
+
+/* Custom recur row */
+.wp-custom-recur-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+
+.wp-custom-recur-label {
+    font-size: 0.5625rem;
+    color: var(--text-secondary);
+    letter-spacing: 0.06em;
+    flex-shrink: 0;
+}
+
+.wp-recur-num-input {
+    width: 44px;
+    background: #000;
+    border: 1px solid #2a2a2a;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    padding: 4px 6px;
+    outline: none;
+    text-align: center;
+    -moz-appearance: textfield;
+    animation: none;
+}
+.wp-recur-num-input::-webkit-inner-spin-button,
+.wp-recur-num-input::-webkit-outer-spin-button { -webkit-appearance: none; }
+.wp-recur-num-input:focus { border-color: var(--accent); border-right-width: 1px; animation: none; }
+
+.wp-recur-unit-select {
+    background: #000;
+    border: 1px solid #2a2a2a;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    padding: 4px 6px;
+    outline: none;
+    cursor: pointer;
+    flex: 1;
+}
+.wp-recur-unit-select:focus { border-color: var(--accent); }
+
+.wp-card-action-btn {
+    background: transparent;
+    border: 1px solid #2a2a2a;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.5625rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 5px 10px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+}
+.wp-card-action-btn:hover { border-color: var(--text-secondary); color: var(--text-primary); }
+.wp-card-danger { border-color: #2a1010 !important; color: #884444 !important; }
+.wp-card-danger:hover { border-color: #ff4444 !important; color: #ff4444 !important; }
+
+/* Attach modal */
+.wp-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+
+.wp-modal-box {
+    background: #0e0e0e;
+    border: 1px solid var(--border);
+    padding: 20px;
+    min-width: 280px;
+    max-width: 90vw;
+}
+
+.wp-modal-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    color: var(--text-secondary);
+}
+
+.wp-modal-input {
+    width: 100%;
+    background: #000;
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    padding: 8px;
+    outline: none;
+    margin-bottom: 12px;
+    animation: none;
+}
+.wp-modal-input:focus { border-color: var(--accent); border-right-width: 1px; animation: none; }
+
+.wp-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+.wp-modal-btn {
+    padding: 6px 16px;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    text-transform: uppercase;
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.wp-modal-cancel  { background: transparent; color: var(--text-secondary); }
+.wp-modal-cancel:hover { border-color: var(--text-secondary); color: var(--text-primary); }
+.wp-modal-confirm { background: var(--accent); color: #000; border-color: var(--accent); }

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}Athena — Login{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>ATHENA</h1>
+    <p class="subtitle">Enter PIN to continue</p>
+</div>
+
+<div id="status" class="status {% if not error %}hidden{% else %}error{% endif %}">
+    {{ error or '' }}
+</div>
+
+<div class="pin-display">
+    <div class="pin-dots">
+        <span class="dot" data-index="0"></span>
+        <span class="dot" data-index="1"></span>
+        <span class="dot" data-index="2"></span>
+        <span class="dot" data-index="3"></span>
+        <span class="dot" data-index="4"></span>
+        <span class="dot" data-index="5"></span>
+    </div>
+</div>
+
+<form id="pin-form" method="POST" action="/login">
+    <input type="hidden" id="pin-input" name="pin" value="">
+    <div class="keypad">
+        <button type="button" class="key" data-value="1">1</button>
+        <button type="button" class="key" data-value="2">2</button>
+        <button type="button" class="key" data-value="3">3</button>
+        <button type="button" class="key" data-value="4">4</button>
+        <button type="button" class="key" data-value="5">5</button>
+        <button type="button" class="key" data-value="6">6</button>
+        <button type="button" class="key" data-value="7">7</button>
+        <button type="button" class="key" data-value="8">8</button>
+        <button type="button" class="key" data-value="9">9</button>
+        <button type="button" class="key clear" data-value="clear">C</button>
+        <button type="button" class="key" data-value="0">0</button>
+        <button type="submit" class="key enter">&#10003;</button>
+    </div>
+</form>
+
+{% if locked_seconds %}
+<p class="lockout-message">Too many attempts. Try again in {{ locked_seconds }} seconds.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PIN_LENGTH = 6;
+let currentPin = '';
+const pinInput = document.getElementById('pin-input');
+const dots = document.querySelectorAll('.dot');
+
+function updateDisplay() {
+    dots.forEach((dot, i) => dot.classList.toggle('filled', i < currentPin.length));
+    pinInput.value = currentPin;
+}
+
+document.querySelectorAll('.key[data-value]').forEach(key => {
+    key.addEventListener('click', () => {
+        const value = key.dataset.value;
+        if (value === 'clear') {
+            currentPin = '';
+        } else if (currentPin.length < PIN_LENGTH) {
+            currentPin += value;
+        }
+        updateDisplay();
+    });
+});
+
+document.addEventListener('keydown', e => {
+    if (e.key >= '0' && e.key <= '9') {
+        if (currentPin.length < PIN_LENGTH) { currentPin += e.key; updateDisplay(); }
+    } else if (e.key === 'Backspace') {
+        currentPin = currentPin.slice(0, -1); updateDisplay();
+    } else if (e.key === 'Escape') {
+        currentPin = ''; updateDisplay();
+    }
+});
+</script>
+{% endblock %}

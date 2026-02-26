@@ -1,0 +1,752 @@
+{% extends "base.html" %}
+
+{% block title %}Athena{% endblock %}
+
+{% block head %}
+<style>
+.container { max-width: 100% !important; padding: 8px 10px !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <a href="/logout" class="logout-btn">Logout</a>
+    <h1>Athena</h1>
+</div>
+
+<!-- Week navigation -->
+<div class="week-nav">
+    <button class="week-nav-btn" id="prev-week">&#8592;</button>
+    <div class="week-info">
+        <span class="week-dates" id="week-dates">&#8203;</span>
+        <span class="week-num-label" id="week-num-label">&#8203;</span>
+    </div>
+    <button class="week-nav-btn" id="next-week">&#8594;</button>
+</div>
+
+<!-- 7-column day grid -->
+<div class="week-grid" id="week-grid"></div>
+
+<!-- Someday section -->
+<div class="wp-someday">
+    <div class="wp-someday-header">Someday</div>
+    <div class="wp-someday-tasks" id="someday-tasks"></div>
+    <div class="wp-someday-add">
+        <input type="text" class="wp-add-input" id="someday-add-input"
+               placeholder="+" autocomplete="off">
+    </div>
+</div>
+
+<!-- Card panel (Trello-style) -->
+<div id="wp-card-panel" style="display:none">
+    <div class="wp-card-header">
+        <input type="text" class="wp-card-title" id="wp-card-title" autocomplete="off">
+        <button class="wp-card-close" id="wp-card-close">&#10005;</button>
+    </div>
+
+    <div class="wp-card-section">
+        <div class="wp-card-label">Notes</div>
+        <textarea id="wp-card-notes" class="wp-card-notes-input" placeholder="Add a note..."></textarea>
+    </div>
+
+    <div class="wp-card-section">
+        <div class="wp-card-label">Recurring</div>
+        <div class="wp-card-pills" id="wp-card-recur-pills"></div>
+        <div id="wp-custom-recur" style="display:none" class="wp-custom-recur-row">
+            <span class="wp-custom-recur-label">Every</span>
+            <input type="number" id="wp-recur-num" min="1" max="99" value="1" class="wp-recur-num-input">
+            <select id="wp-recur-unit" class="wp-recur-unit-select">
+                <option value="days">days</option>
+                <option value="weeks">weeks</option>
+                <option value="months">months</option>
+                <option value="years">years</option>
+                <option value="Sun">Sun</option>
+                <option value="Mon">Mon</option>
+                <option value="Tue">Tue</option>
+                <option value="Wed">Wed</option>
+                <option value="Thu">Thu</option>
+                <option value="Fri">Fri</option>
+                <option value="Sat">Sat</option>
+            </select>
+            <button id="wp-recur-set" class="wp-card-pill active">Set</button>
+        </div>
+    </div>
+
+    <div class="wp-card-section" id="wp-card-defer-section">
+        <div class="wp-card-label">Defer to</div>
+        <div class="wp-card-pills">
+            <button class="wp-card-pill" data-defer="tomorrow">Tomorrow</button>
+            <button class="wp-card-pill" data-defer="next_week">Next week</button>
+            <button class="wp-card-pill" data-defer="someday">Someday</button>
+        </div>
+    </div>
+
+    <div class="wp-card-section wp-card-actions">
+        <button class="wp-card-action-btn" id="wp-card-duplicate">Duplicate</button>
+        <button class="wp-card-action-btn" id="wp-card-attach">Attach&#8230;</button>
+        <button class="wp-card-action-btn wp-card-danger" id="wp-card-delete">Delete</button>
+    </div>
+</div>
+
+<!-- Attach modal -->
+<div class="wp-modal-overlay" id="wp-attach-modal" style="display:none">
+    <div class="wp-modal-box">
+        <div class="wp-modal-title">Attach File</div>
+        <input type="text" class="wp-modal-input" id="wp-attach-input"
+               placeholder="filename.md" autocomplete="off">
+        <div class="wp-modal-actions">
+            <button class="wp-modal-btn wp-modal-cancel" id="wp-attach-cancel">Cancel</button>
+            <button class="wp-modal-btn wp-modal-confirm" id="wp-attach-confirm">Attach</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentWeekMonday = null;
+let activeCard = null;
+let cardNoteOriginal = '';
+let cardTitleOriginal = '';
+let somedaySortable = null;
+let pendingFocusSection = null;
+
+const COLLAPSED_KEY = 'athena-collapsed-days';
+
+function getCollapsedDays() {
+    try { return JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]'); } catch { return []; }
+}
+function setCollapsedDays(arr) {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify(arr));
+}
+function toggleDayCollapse(dayName) {
+    const cols = getCollapsedDays();
+    const idx = cols.indexOf(dayName);
+    if (idx === -1) cols.push(dayName); else cols.splice(idx, 1);
+    setCollapsedDays(cols);
+    applyCollapsedStates();
+}
+function applyCollapsedStates() {
+    const collapsed = getCollapsedDays();
+    document.querySelectorAll('.day-col[data-day]').forEach(col => {
+        const day = col.dataset.day;
+        col.classList.toggle('collapsed', collapsed.includes(day));
+    });
+    updateGridColumns();
+}
+function updateGridColumns() {
+    if (window.innerWidth < 820) return;
+    const cols = Array.from(document.querySelectorAll('.day-col'));
+    const template = cols.map(col => col.classList.contains('collapsed') ? '26px' : '1fr').join(' ');
+    document.getElementById('week-grid').style.gridTemplateColumns = template;
+}
+window.addEventListener('resize', updateGridColumns);
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+
+async function fetchApi(url, opts = {}) {
+    const res = await fetch(url, opts);
+    if (res.redirected && res.url.includes('/login')) {
+        window.location.href = '/login';
+        return null;
+    }
+    return res;
+}
+
+function esc(str) {
+    return String(str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function todayStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function addDays(dateStr, n) {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    dt.setDate(dt.getDate() + n);
+    return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+}
+
+// ── Load & Render ────────────────────────────────────────────────────────────
+
+async function loadWeek(dateStr) {
+    try {
+        const res = await fetchApi(`/api/week?date=${dateStr}`);
+        if (!res) return;
+        if (!res.ok) throw new Error(await res.text());
+        renderWeek(await res.json());
+    } catch (err) {
+        console.error('Athena load error:', err);
+    }
+}
+
+function renderWeek(data) {
+    const savedCard = activeCard;
+    activeCard = null;
+    currentWeekMonday = data.monday;
+
+    document.getElementById('week-dates').textContent = data.header;
+    document.getElementById('week-num-label').textContent = `WEEK ${data.week_num}`;
+
+    const grid = document.getElementById('week-grid');
+    grid.innerHTML = '';
+
+    data.days.forEach(day => {
+        const col = document.createElement('div');
+        col.className = 'day-col' + (day.is_today ? ' today' : '');
+        col.dataset.day = day.name;
+
+        col.innerHTML = `<div class="day-header">
+            <span class="day-name">${day.short}</span>
+            <span class="day-date-num">${day.date_num}</span>
+            <button class="wp-day-eye" data-day="${day.name}" title="Hide/show">&#9900;</button>
+        </div>`;
+
+        col.querySelector('.wp-day-eye').addEventListener('click', e => {
+            e.stopPropagation();
+            toggleDayCollapse(day.name);
+        });
+
+        const tasksDiv = document.createElement('div');
+        tasksDiv.className = 'day-tasks';
+        tasksDiv.dataset.section = day.name;
+        tasksDiv.dataset.date = day.date_str;
+
+        data.recurring.forEach(text => {
+            const item = document.createElement('div');
+            item.className = 'wp-recurring-item';
+            item.innerHTML = `<span class="wp-recurring-icon">&#8635;</span>
+                              <span class="wp-recurring-text">${esc(text)}</span>`;
+            tasksDiv.appendChild(item);
+        });
+
+        if (data.recurring.length > 0) {
+            const sep = document.createElement('div');
+            sep.className = 'wp-task-sep';
+            tasksDiv.appendChild(sep);
+        }
+
+        day.tasks.forEach(task => {
+            tasksDiv.appendChild(makeTaskEl(task, day.date_str, day.name));
+        });
+
+        col.appendChild(tasksDiv);
+
+        const addDiv = document.createElement('div');
+        addDiv.className = 'wp-task-add';
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.className = 'wp-add-input';
+        inp.placeholder = '+';
+        inp.autocomplete = 'off';
+        inp.dataset.section = day.name;
+        inp.dataset.date = day.date_str;
+        inp.addEventListener('keydown', e => {
+            if (e.key === 'Enter') handleAddTaskDirect(inp, inp.dataset.section, inp.dataset.date, true);
+        });
+        addDiv.appendChild(inp);
+        col.appendChild(addDiv);
+        grid.appendChild(col);
+    });
+
+    const somedayEl = document.getElementById('someday-tasks');
+    somedayEl.innerHTML = '';
+    data.someday.forEach(task => {
+        somedayEl.appendChild(makeTaskEl(task, data.monday, 'Someday'));
+    });
+
+    const somedayAdd = document.getElementById('someday-add-input');
+    const newAdd = somedayAdd.cloneNode(true);
+    somedayAdd.replaceWith(newAdd);
+    newAdd.dataset.date = data.monday;
+    newAdd.addEventListener('keydown', e => {
+        if (e.key === 'Enter') handleAddTaskDirect(newAdd, 'Someday', data.monday, false);
+    });
+
+    initSortables(data.monday);
+    applyCollapsedStates();
+
+    if (window.innerWidth < 820) {
+        const todayCol = document.querySelector('.day-col.today');
+        if (todayCol) setTimeout(() => todayCol.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    }
+
+    // Focus next input if Enter was pressed to add a task
+    if (pendingFocusSection) {
+        const target = pendingFocusSection;
+        pendingFocusSection = null;
+        setTimeout(() => {
+            if (target === 'Someday') {
+                document.getElementById('someday-add-input')?.focus();
+            } else {
+                document.querySelector(`.wp-add-input[data-section="${target}"]`)?.focus();
+            }
+        }, 50);
+    }
+
+    // Re-open card panel if it was open before reload
+    if (savedCard) {
+        let matchTask = null;
+        data.days.forEach(day => {
+            if (day.name === savedCard.section) {
+                const t = day.tasks.find(t => t.section_idx === savedCard.section_idx);
+                if (t) matchTask = { ...t, date_str: day.date_str, section: day.name };
+            }
+        });
+        if (!matchTask && savedCard.section === 'Someday') {
+            const t = data.someday.find(t => t.section_idx === savedCard.section_idx);
+            if (t) matchTask = { ...t, date_str: data.monday, section: 'Someday' };
+        }
+        if (matchTask) openCardPanel(matchTask);
+    }
+}
+
+function makeTaskEl(task, dateStr, section) {
+    const div = document.createElement('div');
+    div.className = 'wp-task-item' + (task.checked ? ' checked' : '');
+    div.dataset.sectionIdx = task.section_idx;
+    div.dataset.date = dateStr;
+    div.dataset.section = section;
+    div.dataset.text = task.text;
+    div.dataset.note = task.note || '';
+    if (task.recur) div.dataset.recur = task.recur;
+
+    let badges = '';
+    if (task.recur) badges += `<span class="wp-recur-badge" title="Recurring: ${esc(task.recur)}">&#8635;</span>`;
+    if (task.attachment) badges += `<span class="wp-attach-badge" title="${esc(task.attachment)}">&#128206;</span>`;
+    if (task.note) badges += `<span class="wp-note-dot">&#183;</span>`;
+
+    div.innerHTML = `
+        <div class="wp-task-row">
+            <span class="wp-drag-handle">&#8942;</span>
+            <input type="checkbox" class="wp-task-check" ${task.checked ? 'checked' : ''}>
+            <span class="wp-task-text">${esc(task.text)}${badges}</span>
+        </div>`;
+
+    div.querySelector('.wp-task-check').addEventListener('change', handleToggle);
+    div.querySelector('.wp-task-text').addEventListener('click', () => {
+        openCardPanel({
+            text: task.text,
+            note: div.dataset.note,
+            date_str: dateStr,
+            section: section,
+            section_idx: task.section_idx,
+            recur: div.dataset.recur || null,
+            attachment: task.attachment || null,
+            is_someday: section === 'Someday',
+        });
+    });
+
+    return div;
+}
+
+function initSortables(mondayStr) {
+    if (typeof Sortable === 'undefined') return;
+
+    const somedayEl = document.getElementById('someday-tasks');
+    somedayEl.dataset.date = mondayStr;
+    somedayEl.dataset.section = 'Someday';
+
+    async function onSortEnd(evt) {
+        const fromEl = evt.from;
+        const toEl = evt.to;
+        const taskEl = evt.item;
+
+        if (fromEl === toEl) {
+            const items = Array.from(fromEl.querySelectorAll('.wp-task-item')).map(el => el.dataset.text);
+            await fetchApi('/api/week/reorder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date: fromEl.dataset.date, section: fromEl.dataset.section, items }),
+            });
+        } else {
+            const text = taskEl.dataset.text;
+            const srcDate = fromEl.dataset.date;
+            const srcSection = fromEl.dataset.section;
+            const srcSectionIdx = parseInt(taskEl.dataset.sectionIdx);
+            const dstDate = toEl.dataset.date;
+            const dstSection = toEl.dataset.section;
+
+            await fetchApi('/api/week/task', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date: srcDate, section: srcSection, section_idx: srcSectionIdx }),
+            });
+            const note = taskEl.dataset.note || '';
+            await fetchApi('/api/week/task', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date: dstDate, section: dstSection, text, note: note || undefined }),
+            });
+            const dstItems = Array.from(toEl.querySelectorAll('.wp-task-item')).map(el => el.dataset.text);
+            await fetchApi('/api/week/reorder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date: dstDate, section: dstSection, items: dstItems }),
+            });
+        }
+        loadWeek(currentWeekMonday);
+    }
+
+    document.querySelectorAll('.day-tasks').forEach(list => {
+        Sortable.create(list, {
+            group: 'week-tasks',
+            animation: 150,
+            handle: '.wp-drag-handle',
+            filter: '.wp-recurring-item, .wp-task-sep',
+            ghostClass: 'sortable-ghost',
+            chosenClass: 'sortable-chosen',
+            onEnd: onSortEnd,
+        });
+    });
+
+    if (somedaySortable) { somedaySortable.destroy(); somedaySortable = null; }
+    somedaySortable = Sortable.create(somedayEl, {
+        group: 'week-tasks',
+        animation: 150,
+        handle: '.wp-drag-handle',
+        ghostClass: 'sortable-ghost',
+        chosenClass: 'sortable-chosen',
+        onEnd: onSortEnd,
+    });
+}
+
+// ── Task Actions ─────────────────────────────────────────────────────────────
+
+async function handleToggle(e) {
+    const taskEl = e.target.closest('.wp-task-item');
+    taskEl.classList.toggle('checked', e.target.checked);
+    await fetchApi('/api/week/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: taskEl.dataset.date, section: taskEl.dataset.section, section_idx: parseInt(taskEl.dataset.sectionIdx), checked: e.target.checked }),
+    });
+}
+
+const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Someday'];
+
+async function handleAddTaskDirect(input, section, dateStr, advanceFocus) {
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    input.disabled = true;
+    if (advanceFocus) {
+        const idx = DAY_ORDER.indexOf(section);
+        pendingFocusSection = idx >= 0 && idx < DAY_ORDER.length - 1 ? DAY_ORDER[idx + 1] : section;
+    }
+    try {
+        await fetchApi('/api/week/task', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date: dateStr, section, text }),
+        });
+        loadWeek(currentWeekMonday);
+    } finally {
+        input.disabled = false;
+    }
+}
+
+// ── Card Panel ────────────────────────────────────────────────────────────────
+
+const RECUR_OPTIONS = [
+    { value: '', label: 'None' },
+    { value: 'daily', label: 'Daily' },
+    { value: 'weekly', label: 'Weekly' },
+    { value: 'weekdays', label: 'Weekdays' },
+    { value: 'biweekly', label: 'Biweekly' },
+    { value: 'monthly', label: 'Monthly' },
+    { value: 'annually', label: 'Annually' },
+    { value: 'custom', label: 'Custom\u2026' },
+];
+
+const STANDARD_RECUR_VALUES = new Set(['', 'daily', 'weekly', 'weekdays', 'biweekly', 'monthly', 'annually']);
+
+function parseCustomRecur(value) {
+    if (!value) return null;
+    const m1 = value.match(/^every (\d+) (days|weeks|months|years)$/i);
+    if (m1) return { num: parseInt(m1[1]), unit: m1[2].toLowerCase() };
+    const m2 = value.match(/^every (Sun|Mon|Tue|Wed|Thu|Fri|Sat)$/i);
+    if (m2) return { num: 1, unit: m2[1] };
+    return null;
+}
+
+function buildCustomRecurValue() {
+    const num = Math.max(1, parseInt(document.getElementById('wp-recur-num').value) || 1);
+    const unit = document.getElementById('wp-recur-unit').value;
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    if (dayNames.includes(unit)) return `every ${unit}`;
+    const singles = { days: 'daily', weeks: 'weekly', months: 'monthly', years: 'annually' };
+    if (num === 1) return singles[unit] || `every ${unit}`;
+    return `every ${num} ${unit}`;
+}
+
+function showCustomRecur(recur) {
+    const el = document.getElementById('wp-custom-recur');
+    el.style.display = '';
+    const parsed = parseCustomRecur(recur);
+    if (parsed) {
+        document.getElementById('wp-recur-num').value = parsed.num;
+        document.getElementById('wp-recur-unit').value = parsed.unit;
+    }
+    setTimeout(() => document.getElementById('wp-recur-num').focus(), 50);
+}
+
+function hideCustomRecur() {
+    document.getElementById('wp-custom-recur').style.display = 'none';
+}
+
+function openCardPanel(task) {
+    activeCard = {
+        date_str: task.date_str,
+        section: task.section,
+        section_idx: task.section_idx,
+        recur: task.recur || null,
+        is_someday: task.is_someday || task.section === 'Someday',
+    };
+
+    const titleEl = document.getElementById('wp-card-title');
+    titleEl.value = task.text;
+    cardTitleOriginal = task.text;
+
+    const notesEl = document.getElementById('wp-card-notes');
+    notesEl.value = task.note || '';
+    cardNoteOriginal = task.note || '';
+    autoResizeCard(notesEl);
+
+    const pillsEl = document.getElementById('wp-card-recur-pills');
+    pillsEl.innerHTML = '';
+    const isCustomRecur = activeCard.recur && !STANDARD_RECUR_VALUES.has(activeCard.recur);
+    RECUR_OPTIONS.forEach(opt => {
+        const btn = document.createElement('button');
+        const isCurrent = opt.value === 'custom'
+            ? isCustomRecur
+            : (activeCard.recur || '') === opt.value;
+        btn.className = 'wp-card-pill' + (isCurrent ? ' active' : '');
+        btn.textContent = opt.label;
+        btn.dataset.recurValue = opt.value;
+        pillsEl.appendChild(btn);
+    });
+
+    if (isCustomRecur) {
+        showCustomRecur(activeCard.recur);
+    } else {
+        hideCustomRecur();
+    }
+
+    document.getElementById('wp-card-defer-section').style.display = activeCard.is_someday ? 'none' : '';
+    document.getElementById('wp-card-panel').style.display = 'block';
+}
+
+async function saveCardTitle() {
+    if (!activeCard) return;
+    const newText = document.getElementById('wp-card-title').value.trim();
+    if (!newText || newText === cardTitleOriginal) return;
+    cardTitleOriginal = newText;
+    await fetchApi('/api/week/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            date: activeCard.date_str,
+            section: activeCard.section,
+            section_idx: activeCard.section_idx,
+            text: newText,
+        }),
+    });
+}
+
+async function saveCardChanges() {
+    await saveCardNote();
+    await saveCardTitle();
+}
+
+async function closeCardPanel() {
+    await saveCardChanges();
+    document.getElementById('wp-card-panel').style.display = 'none';
+    activeCard = null;
+    cardNoteOriginal = '';
+    cardTitleOriginal = '';
+}
+
+function autoResizeCard(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.max(60, el.scrollHeight) + 'px';
+}
+
+async function saveCardNote() {
+    if (!activeCard) return;
+    const newNote = document.getElementById('wp-card-notes').value.trim();
+    if (newNote === cardNoteOriginal) return;
+    cardNoteOriginal = newNote;
+    await fetchApi('/api/week/note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            date: activeCard.date_str,
+            section: activeCard.section,
+            section_idx: activeCard.section_idx,
+            note: newNote,
+        }),
+    });
+}
+
+document.getElementById('wp-card-notes').addEventListener('input', function () { autoResizeCard(this); });
+document.getElementById('wp-card-notes').addEventListener('blur', saveCardNote);
+document.getElementById('wp-card-title').addEventListener('blur', saveCardTitle);
+document.getElementById('wp-card-title').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('wp-card-title').blur(); }
+});
+document.getElementById('wp-card-close').addEventListener('click', closeCardPanel);
+
+document.getElementById('wp-card-recur-pills').addEventListener('click', async function (e) {
+    const btn = e.target.closest('.wp-card-pill[data-recur-value]');
+    if (!btn || !activeCard) return;
+    const rv = btn.dataset.recurValue;
+    if (rv === 'custom') {
+        // Mark pill active, show inline custom UI — don't call API yet
+        document.querySelectorAll('#wp-card-recur-pills .wp-card-pill').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        showCustomRecur(activeCard.recur);
+        return;
+    }
+    hideCustomRecur();
+    await saveCardChanges();
+    const { date_str, section, section_idx } = activeCard;
+    activeCard.recur = rv || null;
+    await fetchApi('/api/week/recur', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: date_str, section, section_idx, recur: rv }),
+    });
+    loadWeek(currentWeekMonday);
+});
+
+async function applyCustomRecur() {
+    if (!activeCard) return;
+    const rv = buildCustomRecurValue();
+    await saveCardChanges();
+    const { date_str, section, section_idx } = activeCard;
+    activeCard.recur = rv;
+    await fetchApi('/api/week/recur', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: date_str, section, section_idx, recur: rv }),
+    });
+    loadWeek(currentWeekMonday);
+}
+
+document.getElementById('wp-recur-set').addEventListener('click', applyCustomRecur);
+document.getElementById('wp-recur-num').addEventListener('keydown', e => {
+    if (e.key === 'Enter') applyCustomRecur();
+});
+document.getElementById('wp-recur-unit').addEventListener('keydown', e => {
+    if (e.key === 'Enter') applyCustomRecur();
+});
+
+document.getElementById('wp-card-defer-section').addEventListener('click', async function (e) {
+    const btn = e.target.closest('[data-defer]');
+    if (!btn || !activeCard) return;
+    await saveCardChanges();
+    const { date_str, section, section_idx } = activeCard;
+    closeCardPanel();
+    await fetchApi('/api/week/defer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: date_str, section, section_idx, defer_to: btn.dataset.defer }),
+    });
+    loadWeek(currentWeekMonday);
+});
+
+document.getElementById('wp-card-duplicate').addEventListener('click', async () => {
+    if (!activeCard) return;
+    await saveCardChanges();
+    const { date_str, section, section_idx } = activeCard;
+    await fetchApi('/api/week/duplicate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: date_str, section, section_idx }),
+    });
+    loadWeek(currentWeekMonday);
+});
+
+document.getElementById('wp-card-attach').addEventListener('click', async () => {
+    if (!activeCard) return;
+    await saveCardChanges();
+    openAttachModal();
+});
+
+document.getElementById('wp-card-delete').addEventListener('click', async () => {
+    if (!activeCard) return;
+    const { date_str, section, section_idx } = activeCard;
+    closeCardPanel();
+    await fetchApi('/api/week/task', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: date_str, section, section_idx }),
+    });
+    loadWeek(currentWeekMonday);
+});
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+        closeCardPanel();
+        document.getElementById('wp-attach-modal').style.display = 'none';
+    }
+});
+
+document.addEventListener('click', e => {
+    if (activeCard &&
+        !e.target.closest('#wp-card-panel') &&
+        !e.target.closest('.wp-task-text') &&
+        !e.target.closest('#wp-attach-modal')) {
+        closeCardPanel();
+    }
+});
+
+// ── Attach Modal ──────────────────────────────────────────────────────────────
+
+function openAttachModal() {
+    document.getElementById('wp-attach-input').value = '';
+    document.getElementById('wp-attach-modal').style.display = 'flex';
+    setTimeout(() => document.getElementById('wp-attach-input').focus(), 50);
+}
+
+document.getElementById('wp-attach-cancel').addEventListener('click', () => {
+    document.getElementById('wp-attach-modal').style.display = 'none';
+});
+
+document.getElementById('wp-attach-confirm').addEventListener('click', async () => {
+    if (!activeCard) return;
+    const filename = document.getElementById('wp-attach-input').value.trim();
+    document.getElementById('wp-attach-modal').style.display = 'none';
+    const { date_str, section, section_idx } = activeCard;
+    await fetchApi('/api/week/attach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: date_str, section, section_idx, filename }),
+    });
+    loadWeek(currentWeekMonday);
+});
+
+document.getElementById('wp-attach-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('wp-attach-confirm').click();
+    if (e.key === 'Escape') document.getElementById('wp-attach-cancel').click();
+});
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+
+document.getElementById('prev-week').addEventListener('click', () => {
+    if (currentWeekMonday) loadWeek(addDays(currentWeekMonday, -7));
+});
+document.getElementById('next-week').addEventListener('click', () => {
+    if (currentWeekMonday) loadWeek(addDays(currentWeekMonday, 7));
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+loadWeek(todayStr());
+</script>
+{% endblock %}

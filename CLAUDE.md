@@ -1,6 +1,6 @@
 # Athena
 
-Weekly planner (Tweek-inspired). Flask service on port 5002, deployed alongside duo-brain and Chronos on the Pi.
+Weekly planner — 7-column grid with Someday backlog. Flask service on port 5002, deployed alongside duo-brain and Chronos on the Pi.
 
 **Phil's Notes:** `/home/phil/Documents/philVault/Projects/Athena/`
 

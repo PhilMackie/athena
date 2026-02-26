@@ -1,6 +1,6 @@
 # Athena
 
-A Tweek-inspired weekly planner with a 7-column task grid and Someday backlog. Stores tasks as Obsidian-compatible markdown in the vault. Built with Flask, deployed on a Raspberry Pi alongside duo-brain and Chronos.
+A weekly planner with a 7-column task grid and Someday backlog. Stores tasks as Obsidian-compatible markdown in the vault. Built with Flask, deployed on a Raspberry Pi alongside duo-brain and Chronos.
 
 ## Features
 

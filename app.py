@@ -7,6 +7,7 @@ from daemons.auth import (
     record_failed_attempt, clear_failed_attempts
 )
 from daemons.weekplan import (
+    init_db,
     get_or_create_week, add_task, toggle_task, delete_task,
     set_task_recur, defer_task, duplicate_task, attach_file, reorder_section,
     set_task_note, rename_task,
@@ -25,6 +26,8 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 app.permanent_session_lifetime = timedelta(hours=24)
+
+init_db()
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────

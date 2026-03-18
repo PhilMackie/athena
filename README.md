@@ -12,11 +12,15 @@ A weekly planner with a 7-column task grid and Someday backlog. Built with Flask
   - Recurrence picker (Daily, Weekly, Weekdays, Biweekly, Monthly, Annually, or custom `Every N days/weeks/months/years/Sun–Sat`)
   - Defer to Tomorrow / Next week / Someday
   - Duplicate, Attach file, Delete
+  - Deleting a recurring task prompts: **This one** or **All future**
+  - NRA / DWM binding — completing the task fires the linked duo-brain item
 - **Collapse day columns** — hide past days to a thin strip (desktop), persisted in localStorage
+- **Hide done** — toggle button (desktop) or shake (mobile) to hide completed tasks
+- **Enter → next column** — hitting Enter in an add input moves focus to the next day's input
 - **Global recurring tasks** — loaded from `WeeklyRecurring.md`, shown in every column as read-only
-- **PIN authentication** with lockout after failed attempts
+- **PIN authentication** with lockout after failed attempts, 30-day session
 - **SQLite storage** — tasks stored in `data/athena.db` with UUIDs and timestamps
-- **Responsive** — flat list layout on mobile, larger text, checkboxes on the right
+- **Responsive** — flat list layout on mobile
 
 ## Stack
 
@@ -55,6 +59,15 @@ bash deploy/deploy-to-pi.sh
 ```
 
 Service: `athena.service` (systemd), Pi path: `/opt/athena/`
+
+## Cross-App SSO
+
+Athena participates in the shared SSO network with Quanta (`:5000`) and Chronos (`:5001`). Two auth paths are accepted automatically before every request:
+
+- **URL token** — Quanta appends a signed 5-minute token when linking here. Athena verifies it, logs you in, and strips the token from the URL.
+- **Network cookie** — Any successful login (PIN or token) sets a signed `network_auth` cookie valid for 30 days. Athena accepts this cookie from any port, so navigating here directly also skips the PIN.
+
+**Requirement:** `SECRET_KEY` in `.env` must match across all three apps. See Quanta's README for the full protocol and how to add new apps to the network.
 
 ## Architecture
 

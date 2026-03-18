@@ -70,6 +70,8 @@ document.querySelectorAll('.key[data-value]').forEach(key => {
     });
 });
 
+const form = document.getElementById('pin-form');
+
 document.addEventListener('keydown', e => {
     if (e.key >= '0' && e.key <= '9') {
         if (currentPin.length < PIN_LENGTH) { currentPin += e.key; updateDisplay(); }
@@ -77,6 +79,12 @@ document.addEventListener('keydown', e => {
         currentPin = currentPin.slice(0, -1); updateDisplay();
     } else if (e.key === 'Escape') {
         currentPin = ''; updateDisplay();
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (currentPin.length === PIN_LENGTH) {
+            pinInput.value = currentPin;
+            form.submit();
+        }
     }
 });
 </script>

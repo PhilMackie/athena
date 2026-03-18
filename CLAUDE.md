@@ -4,6 +4,9 @@ Weekly planner — 7-column grid with Someday backlog. Flask service on port 500
 
 **Phil's Notes:** `/home/phil/Documents/philVault/Projects/Athena/`
 
+## Key Resources
+- **Architecture:** `philVault/Projects/Quanta/Personal Hub Architecture – Step-by-Step Plan.md`
+
 ## Architecture
 
 - `app.py` — Flask routes + auth, calls `init_db()` at startup

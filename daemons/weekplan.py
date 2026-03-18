@@ -4,6 +4,7 @@ Source of truth: data/athena.db
 Recurring tasks: vault/Projects/Quanta/Templates/WeeklyRecurring.md
 """
 
+import json
 import re
 import sqlite3
 import uuid
@@ -16,6 +17,7 @@ RECURRING_FILE = config.TEMPLATES_DIR / "WeeklyRecurring.md"
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 SECTIONS = DAY_NAMES + ["Someday"]
+SOMEDAY_WEEK = '1900-01-01'  # sentinel: Someday tasks are global, not week-specific
 MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -46,13 +48,42 @@ def init_db():
                 attachment   TEXT,
                 note         TEXT,
                 created_at   TEXT NOT NULL,
-                completed_at TEXT
+                completed_at TEXT,
+                nra_binding  TEXT,
+                dwm_binding  TEXT
             )
         """)
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_tasks_week_section
             ON tasks (week_monday, section, position)
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS weeks_initialized (
+                week_monday TEXT PRIMARY KEY
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS migrations (
+                name TEXT PRIMARY KEY
+            )
+        """)
+        for col in ('nra_binding', 'dwm_binding'):
+            try:
+                conn.execute(f'ALTER TABLE tasks ADD COLUMN {col} TEXT')
+            except Exception:
+                pass
+        for col in ('steps TEXT', 'block_id TEXT'):
+            try:
+                conn.execute(f'ALTER TABLE tasks ADD COLUMN {col}')
+            except Exception:
+                pass
+        # Migrate any Someday tasks that are scattered across week_monday values
+        conn.execute(
+            "UPDATE tasks SET week_monday=? WHERE section='Someday' AND week_monday!=?",
+            (SOMEDAY_WEEK, SOMEDAY_WEEK)
+        )
+        # Release any tasks stuck in blocks
+        conn.execute("UPDATE tasks SET block_id=NULL WHERE block_id IS NOT NULL")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -70,9 +101,10 @@ def _get_monday(date_str: str) -> str:
 
 
 def _get_task_by_idx(conn, week_monday: str, section: str, section_idx: int):
+    wm = SOMEDAY_WEEK if section == 'Someday' else week_monday
     tasks = conn.execute(
         "SELECT * FROM tasks WHERE week_monday=? AND section=? ORDER BY position",
-        (week_monday, section),
+        (wm, section),
     ).fetchall()
     if section_idx < 0 or section_idx >= len(tasks):
         return None
@@ -80,11 +112,12 @@ def _get_task_by_idx(conn, week_monday: str, section: str, section_idx: int):
 
 
 def _normalize_positions(conn, week_monday: str, section: str):
-    rows = conn.execute(
+    wm = SOMEDAY_WEEK if section == 'Someday' else week_monday
+    tasks = conn.execute(
         "SELECT id FROM tasks WHERE week_monday=? AND section=? ORDER BY position",
-        (week_monday, section),
+        (wm, section),
     ).fetchall()
-    for i, row in enumerate(rows):
+    for i, row in enumerate(tasks):
         conn.execute("UPDATE tasks SET position=? WHERE id=?", (i, row["id"]))
 
 
@@ -96,7 +129,12 @@ def _row_to_task(row, section_idx: int) -> dict:
         "recur":       row["recur"],
         "attachment":  row["attachment"],
         "note":        row["note"],
+        "nra_binding": row["nra_binding"],
+        "dwm_binding": row["dwm_binding"],
+        "steps":       json.loads(row["steps"]) if row["steps"] else [],
     }
+
+
 
 
 # ── Recurring global tasks ────────────────────────────────────────────────────
@@ -116,50 +154,143 @@ def load_recurring() -> list:
 
 # ── Week data ─────────────────────────────────────────────────────────────────
 
+_DAY_ABBR = {'Sun': 'Sunday', 'Mon': 'Monday', 'Tue': 'Tuesday',
+             'Wed': 'Wednesday', 'Thu': 'Thursday', 'Fri': 'Friday', 'Sat': 'Saturday'}
+_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+
+
+def _sections_for_recur(original_section: str, recur: str) -> list:
+    """Return the day sections a task should appear in for the new week."""
+    if not recur or original_section == 'Someday':
+        return [original_section]
+    if recur == 'daily':
+        return DAY_NAMES[:]
+    if recur == 'weekdays':
+        return _WEEKDAYS[:]
+    m = re.match(r'^every (Sun|Mon|Tue|Wed|Thu|Fri|Sat)$', recur, re.IGNORECASE)
+    if m:
+        return [_DAY_ABBR.get(m.group(1).capitalize(), original_section)]
+    return [original_section]
+
+
+def _interval_days(recur: str) -> int | None:
+    """Days between occurrences for interval-based recurrence.
+    Returns None for section-based patterns (daily, weekdays, every Mon, etc.)
+    that should be carried every week regardless."""
+    if not recur:
+        return None
+    r = recur.lower().strip()
+    if r == 'weekly':
+        return 7
+    if r == 'biweekly':
+        return 14
+    if r == 'monthly':
+        return 30
+    if r == 'annually':
+        return 365
+    m = re.match(r'^every (\d+) (days?|weeks?|months?|years?)$', r)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2).rstrip('s')
+        return n * {'day': 1, 'week': 7, 'month': 30, 'year': 365}[unit]
+    return None  # section-based — carry every week
+
+
+def _should_carry(conn, text: str, section: str, recur: str, target_monday: str) -> bool:
+    """For interval-based recurrence, check if target_monday falls on a cycle.
+    Uses the earliest known occurrence as the reference point."""
+    interval = _interval_days(recur)
+    if interval is None or interval <= 7:
+        return True  # section-based or weekly — always carry
+    row = conn.execute(
+        "SELECT MIN(week_monday) FROM tasks WHERE text=? AND section=? AND recur=?",
+        (text, section, recur),
+    ).fetchone()
+    if not row or not row[0]:
+        return True
+    earliest = date.fromisoformat(row[0])
+    target = date.fromisoformat(target_monday)
+    days_since = (target - earliest).days
+    if days_since < 0:
+        return False
+    # Carry if a cycle day falls within this 7-day week window
+    return days_since % interval < 7
+
+
 def get_or_create_week(date_str: str) -> dict:
     monday, sunday = get_week_bounds(date_str)
     week_monday = monday.isoformat()
 
     with get_db() as conn:
-        count = conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE week_monday=?", (week_monday,)
-        ).fetchone()[0]
+        carry_done = conn.execute(
+            "SELECT 1 FROM weeks_initialized WHERE week_monday=?", (week_monday,)
+        ).fetchone()
 
-        if count == 0:
-            prev_monday = (monday - timedelta(days=7)).isoformat()
-            carry = conn.execute(
-                """SELECT * FROM tasks WHERE week_monday=? AND checked=0
-                   AND (recur IS NOT NULL OR section='Someday')
-                   ORDER BY section, position""",
-                (prev_monday,),
-            ).fetchall()
+        if not carry_done:
+            carry = []
+            for weeks_back in range(1, 53):
+                candidate = (monday - timedelta(days=7 * weeks_back)).isoformat()
+                rows = conn.execute(
+                    """SELECT * FROM tasks WHERE week_monday=? AND recur IS NOT NULL
+                       ORDER BY section, position""",
+                    (candidate,),
+                ).fetchall()
+                if rows:
+                    carry = rows
+                    break
+
             now = datetime.utcnow().isoformat()
+            inserted = set()
+
             for t in carry:
-                conn.execute(
-                    """INSERT INTO tasks
-                       (id, week_monday, section, position, text, checked,
-                        recur, attachment, note, created_at)
-                       VALUES (?,?,?,?,?,0,?,?,?,?)""",
-                    (str(uuid.uuid4()), week_monday, t["section"], t["position"],
-                     t["text"], t["recur"], t["attachment"], t["note"], now),
-                )
-            for section in SECTIONS:
+                if not _should_carry(conn, t["text"], t["section"], t["recur"], week_monday):
+                    continue
+                for target_section in _sections_for_recur(t["section"], t["recur"]):
+                    key = (t["text"], target_section)
+                    if key in inserted:
+                        continue
+                    already = conn.execute(
+                        "SELECT 1 FROM tasks WHERE week_monday=? AND section=? AND text=?",
+                        (week_monday, target_section, t["text"]),
+                    ).fetchone()
+                    if already:
+                        inserted.add(key)
+                        continue
+                    inserted.add(key)
+                    conn.execute(
+                        """INSERT INTO tasks
+                           (id, week_monday, section, position, text, checked,
+                            recur, attachment, note, created_at, nra_binding, dwm_binding, steps)
+                           VALUES (?,?,?,?,?,0,?,?,?,?,?,?,?)""",
+                        (str(uuid.uuid4()), week_monday, target_section, 999,
+                         t["text"], t["recur"], t["attachment"], t["note"], now,
+                         t["nra_binding"], t["dwm_binding"], t["steps"]),
+                    )
+            for section in DAY_NAMES:
                 _normalize_positions(conn, week_monday, section)
+            conn.execute(
+                "INSERT OR IGNORE INTO weeks_initialized VALUES (?)", (week_monday,)
+            )
 
         rows = conn.execute(
-            "SELECT * FROM tasks WHERE week_monday=? ORDER BY section, position",
+            "SELECT * FROM tasks WHERE week_monday=? AND section!='Someday' ORDER BY section, position",
             (week_monday,),
         ).fetchall()
 
-    by_section = {s: [] for s in SECTIONS}
+        someday_rows = conn.execute(
+            "SELECT * FROM tasks WHERE section='Someday' ORDER BY position",
+        ).fetchall()
+
+    by_section = {s: [] for s in DAY_NAMES}
     for row in rows:
         if row["section"] in by_section:
             by_section[row["section"]].append(row)
 
     indexed = {
         s: [_row_to_task(r, i) for i, r in enumerate(by_section[s])]
-        for s in SECTIONS
+        for s in DAY_NAMES
     }
+    someday_indexed = [_row_to_task(r, i) for i, r in enumerate(someday_rows)]
 
     today = date.today()
     week_num = monday.isocalendar()[1]
@@ -173,7 +304,7 @@ def get_or_create_week(date_str: str) -> dict:
             "date_num": d.day,
             "date_str": d.isoformat(),
             "is_today": d == today,
-            "tasks":    indexed[name],
+            "items":    indexed[name],
         })
 
     return {
@@ -190,7 +321,7 @@ def get_or_create_week(date_str: str) -> dict:
             f"{MONTH_ABBR[sunday.month-1]} {sunday.day}"
         ),
         "days":      days,
-        "someday":   indexed["Someday"],
+        "someday":   someday_indexed,
         "recurring": load_recurring(),
     }
 
@@ -204,7 +335,7 @@ def add_task(date_str: str, section: str, text: str,
     text = text.strip()
     if not text:
         return {"error": "Task text required"}
-    week_monday = _get_monday(date_str)
+    week_monday = SOMEDAY_WEEK if section == 'Someday' else _get_monday(date_str)
     now = datetime.utcnow().isoformat()
     with get_db() as conn:
         max_pos = conn.execute(
@@ -235,7 +366,14 @@ def toggle_task(date_str: str, section: str, section_idx: int, checked: bool) ->
             "UPDATE tasks SET checked=?, completed_at=? WHERE id=?",
             (1 if checked else 0, completed_at, task["id"]),
         )
-    return {"status": "saved"}
+        nra_binding = task["nra_binding"] if checked else None
+        dwm_binding = task["dwm_binding"] if checked else None
+    result = {"status": "saved"}
+    if nra_binding:
+        result["nra_binding"] = nra_binding
+    if dwm_binding:
+        result["dwm_binding"] = dwm_binding
+    return result
 
 
 def delete_task(date_str: str, section: str, section_idx: int) -> dict:
@@ -251,6 +389,22 @@ def delete_task(date_str: str, section: str, section_idx: int) -> dict:
     return {"status": "saved"}
 
 
+def delete_task_all_future(date_str: str, section: str, section_idx: int) -> dict:
+    """Delete this recurring task and all future instances with the same text."""
+    if section not in SECTIONS:
+        return {"error": "Invalid section"}
+    week_monday = _get_monday(date_str)
+    with get_db() as conn:
+        task = _get_task_by_idx(conn, week_monday, section, section_idx)
+        if not task:
+            return {"error": "Task not found"}
+        conn.execute(
+            "DELETE FROM tasks WHERE text=? AND recur IS NOT NULL AND week_monday >= ?",
+            (task["text"], week_monday),
+        )
+    return {"status": "saved"}
+
+
 def set_task_recur(date_str: str, section: str, section_idx: int, recur: str) -> dict:
     if section not in SECTIONS:
         return {"error": "Invalid section"}
@@ -259,8 +413,30 @@ def set_task_recur(date_str: str, section: str, section_idx: int, recur: str) ->
         task = _get_task_by_idx(conn, week_monday, section, section_idx)
         if not task:
             return {"error": "Task not found"}
-        conn.execute("UPDATE tasks SET recur=? WHERE id=?",
-                     (recur.strip() or None, task["id"]))
+        recur_val = recur.strip() or None
+        conn.execute("UPDATE tasks SET recur=? WHERE id=?", (recur_val, task["id"]))
+
+        # Expand to other sections of the same week immediately
+        if recur_val and section != 'Someday':
+            now = datetime.utcnow().isoformat()
+            for target_section in _sections_for_recur(section, recur_val):
+                if target_section == section:
+                    continue
+                exists = conn.execute(
+                    "SELECT 1 FROM tasks WHERE week_monday=? AND section=? AND text=?",
+                    (week_monday, target_section, task["text"]),
+                ).fetchone()
+                if not exists:
+                    conn.execute(
+                        """INSERT INTO tasks
+                           (id, week_monday, section, position, text, checked,
+                            recur, attachment, note, created_at, nra_binding, dwm_binding)
+                           VALUES (?,?,?,?,?,0,?,?,?,?,?,?)""",
+                        (str(uuid.uuid4()), week_monday, target_section, 999,
+                         task["text"], recur_val, task["attachment"], task["note"],
+                         now, task["nra_binding"], task["dwm_binding"]),
+                    )
+                    _normalize_positions(conn, week_monday, target_section)
     return {"status": "saved"}
 
 
@@ -318,7 +494,7 @@ def defer_task(date_str: str, section: str, section_idx: int, defer_to: str) -> 
         if defer_to == "someday":
             if section == "Someday":
                 return {"error": "Already in Someday"}
-            target_monday, target_section = week_monday, "Someday"
+            target_monday, target_section = SOMEDAY_WEEK, "Someday"
 
         elif defer_to == "tomorrow":
             if section == "Someday":
@@ -329,23 +505,23 @@ def defer_task(date_str: str, section: str, section_idx: int, defer_to: str) -> 
 
         elif defer_to == "next_week":
             if section == "Someday":
-                next_mon = date.fromisoformat(week_monday) + timedelta(days=7)
-                target_monday, target_section = next_mon.isoformat(), "Someday"
-            else:
-                next_day = date.fromisoformat(date_str) + timedelta(days=7)
-                target_monday = _get_monday(next_day.isoformat())
-                target_section = next_day.strftime("%A")
+                return {"error": "Already in Someday backlog"}
+            next_mon = date.fromisoformat(week_monday) + timedelta(days=7)
+            target_monday, target_section = next_mon.isoformat(), "Monday"
         else:
             return {"error": f"Unknown defer_to: {defer_to}"}
 
+        old_block_id = task["block_id"]
         max_pos = conn.execute(
-            "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE week_monday=? AND section=?",
+            "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE week_monday=? AND section=? AND block_id IS NULL",
             (target_monday, target_section),
         ).fetchone()[0]
         conn.execute(
-            "UPDATE tasks SET week_monday=?, section=?, position=?, checked=0 WHERE id=?",
+            "UPDATE tasks SET week_monday=?, section=?, position=?, checked=0, block_id=NULL WHERE id=?",
             (target_monday, target_section, max_pos + 1, task["id"]),
         )
+        if old_block_id:
+            _normalize_block_positions(conn, old_block_id)
         _normalize_positions(conn, week_monday, section)
         _normalize_positions(conn, target_monday, target_section)
 
@@ -360,32 +536,105 @@ def duplicate_task(date_str: str, section: str, section_idx: int) -> dict:
         task = _get_task_by_idx(conn, week_monday, section, section_idx)
         if not task:
             return {"error": "Task not found"}
-        conn.execute(
-            "UPDATE tasks SET position=position+1 WHERE week_monday=? AND section=? AND position>?",
-            (week_monday, section, task["position"]),
-        )
         now = datetime.utcnow().isoformat()
-        conn.execute(
-            """INSERT INTO tasks
-               (id, week_monday, section, position, text, checked,
-                recur, attachment, note, created_at)
-               VALUES (?,?,?,?,?,0,?,?,?,?)""",
-            (str(uuid.uuid4()), week_monday, section, task["position"] + 1,
-             task["text"], task["recur"], task["attachment"], task["note"], now),
-        )
-        _normalize_positions(conn, week_monday, section)
+        block_id = task["block_id"]
+        if block_id:
+            conn.execute(
+                "UPDATE tasks SET position=position+1 WHERE block_id=? AND position>?",
+                (block_id, task["position"]),
+            )
+            conn.execute(
+                """INSERT INTO tasks
+                   (id, week_monday, section, position, text, checked,
+                    recur, attachment, note, created_at, block_id)
+                   VALUES (?,?,?,?,?,0,?,?,?,?,?)""",
+                (str(uuid.uuid4()), week_monday, section, task["position"] + 1,
+                 task["text"], task["recur"], task["attachment"], task["note"], now, block_id),
+            )
+            _normalize_block_positions(conn, block_id)
+        else:
+            conn.execute(
+                "UPDATE tasks SET position=position+1 WHERE week_monday=? AND section=? AND block_id IS NULL AND position>?",
+                (week_monday, section, task["position"]),
+            )
+            conn.execute(
+                """INSERT INTO tasks
+                   (id, week_monday, section, position, text, checked,
+                    recur, attachment, note, created_at)
+                   VALUES (?,?,?,?,?,0,?,?,?,?)""",
+                (str(uuid.uuid4()), week_monday, section, task["position"] + 1,
+                 task["text"], task["recur"], task["attachment"], task["note"], now),
+            )
+            _normalize_positions(conn, week_monday, section)
+    return {"status": "saved"}
+
+
+def set_task_binding(date_str: str, section: str, section_idx: int, binding_type: str, value: str) -> dict:
+    if section not in SECTIONS:
+        return {"error": "Invalid section"}
+    if binding_type not in ('nra_binding', 'dwm_binding'):
+        return {"error": "Invalid binding type"}
+    week_monday = _get_monday(date_str)
+    with get_db() as conn:
+        task = _get_task_by_idx(conn, week_monday, section, section_idx)
+        if not task:
+            return {"error": "Task not found"}
+        conn.execute(f"UPDATE tasks SET {binding_type}=? WHERE id=?",
+                     (value.strip() or None, task["id"]))
+    return {"status": "saved"}
+
+
+def toggle_step(date_str: str, section: str, section_idx: int, step_idx: int, checked: bool) -> dict:
+    if section not in SECTIONS:
+        return {"error": "Invalid section"}
+    week_monday = _get_monday(date_str)
+    with get_db() as conn:
+        task = _get_task_by_idx(conn, week_monday, section, section_idx)
+        if not task:
+            return {"error": "Task not found"}
+        steps = json.loads(task["steps"]) if task["steps"] else []
+        if step_idx < 0 or step_idx >= len(steps):
+            return {"error": "Step not found"}
+        steps[step_idx] = 1 if checked else 0
+        all_done = len(steps) > 0 and all(steps)
+        conn.execute("UPDATE tasks SET steps=? WHERE id=?",
+                     (json.dumps(steps), task["id"]))
+    return {"status": "saved", "auto_complete": all_done}
+
+
+def set_step_count(date_str: str, section: str, section_idx: int, count: int) -> dict:
+    if section not in SECTIONS:
+        return {"error": "Invalid section"}
+    count = max(0, int(count))
+    week_monday = _get_monday(date_str)
+    with get_db() as conn:
+        task = _get_task_by_idx(conn, week_monday, section, section_idx)
+        if not task:
+            return {"error": "Task not found"}
+        existing = json.loads(task["steps"]) if task["steps"] else []
+        if count > len(existing):
+            new_steps = existing + [0] * (count - len(existing))
+        else:
+            new_steps = existing[:count]
+        value = json.dumps(new_steps) if new_steps else None
+        conn.execute("UPDATE tasks SET steps=? WHERE id=?", (value, task["id"]))
     return {"status": "saved"}
 
 
 def reorder_section(date_str: str, section: str, ordered_texts: list) -> dict:
     if section not in SECTIONS:
         return {"error": "Invalid section"}
-    week_monday = _get_monday(date_str)
+    week_monday = SOMEDAY_WEEK if section == 'Someday' else _get_monday(date_str)
     with get_db() as conn:
-        tasks = conn.execute(
-            "SELECT * FROM tasks WHERE week_monday=? AND section=? ORDER BY position",
-            (week_monday, section),
-        ).fetchall()
+        if section == 'Someday':
+            tasks = conn.execute(
+                "SELECT * FROM tasks WHERE section='Someday' ORDER BY position",
+            ).fetchall()
+        else:
+            tasks = conn.execute(
+                "SELECT * FROM tasks WHERE week_monday=? AND section=? ORDER BY position",
+                (week_monday, section),
+            ).fetchall()
         text_to_id = {}
         for t in tasks:
             if t["text"] not in text_to_id:
@@ -396,3 +645,5 @@ def reorder_section(date_str: str, section: str, ordered_texts: list) -> dict:
                              (i, text_to_id[text]))
         _normalize_positions(conn, week_monday, section)
     return {"status": "saved"}
+
+

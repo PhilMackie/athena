@@ -1,6 +1,8 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from datetime import datetime, timedelta
+from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 import logging
+import requests
 import config
 from daemons.auth import (
     login_required, verify_pin, is_locked_out,
@@ -8,9 +10,9 @@ from daemons.auth import (
 )
 from daemons.weekplan import (
     init_db,
-    get_or_create_week, add_task, toggle_task, delete_task,
+    get_or_create_week, add_task, toggle_task, delete_task, delete_task_all_future,
     set_task_recur, defer_task, duplicate_task, attach_file, reorder_section,
-    set_task_note, rename_task,
+    set_task_note, rename_task, set_task_binding, toggle_step, set_step_count,
 )
 
 logging.basicConfig(
@@ -25,9 +27,55 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
-app.permanent_session_lifetime = timedelta(hours=24)
+app.permanent_session_lifetime = timedelta(days=30)
 
 init_db()
+
+
+def _set_network_cookie(response):
+    s = URLSafeTimedSerializer(config.SSO_SECRET)
+    value = s.dumps({"net": "athena"}, salt="network-auth")
+    response.set_cookie("network_auth", value, max_age=86400, httponly=True, samesite="Lax")
+    return response
+
+
+@app.before_request
+def consume_sso_token():
+    if request.endpoint == "login_page":
+        return
+    if session.get("authenticated"):
+        if request.args.get("token"):
+            return redirect(request.url.split("?")[0])
+        return
+    if not config.AUTH_ENABLED:
+        return
+    s = URLSafeTimedSerializer(config.SSO_SECRET)
+
+    # Check URL token
+    token = request.args.get("token")
+    if token:
+        try:
+            data = s.loads(token, salt="sso-cross-app", max_age=300)
+            if data.get("sso"):
+                session.permanent = True
+                session["authenticated"] = True
+                resp = redirect(request.url.split("?")[0])
+                _set_network_cookie(resp)
+                return resp
+        except (SignatureExpired, BadSignature):
+            pass
+
+    # Check shared network cookie
+    net_cookie = request.cookies.get("network_auth")
+    if net_cookie:
+        try:
+            data = s.loads(net_cookie, salt="network-auth", max_age=86400)
+            if data.get("net"):
+                session.permanent = True
+                session["authenticated"] = True
+                return
+        except (SignatureExpired, BadSignature):
+            pass
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -54,7 +102,9 @@ def login_page():
             clear_failed_attempts()
             session.permanent = True
             session["authenticated"] = True
-            return redirect(url_for("index"))
+            resp = redirect(url_for("index"))
+            _set_network_cookie(resp)
+            return resp
         else:
             attempts_left, now_locked = record_failed_attempt()
             if now_locked:
@@ -72,12 +122,21 @@ def logout():
     return redirect(url_for("login_page"))
 
 
+@app.route("/api/auth-token")
+@login_required
+def api_auth_token():
+    s = URLSafeTimedSerializer(config.SSO_SECRET)
+    token = s.dumps({"sso": "athena"}, salt="sso-cross-app")
+    return jsonify({"token": token})
+
+
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
 @login_required
 def index():
-    return render_template("index.html")
+    build_time = datetime.now().strftime("%d %b %H:%M")
+    return render_template("index.html", build_time=build_time)
 
 
 # ── API ───────────────────────────────────────────────────────────────────────
@@ -120,7 +179,24 @@ def api_task_toggle():
     result = toggle_task(date_str, section, int(section_idx), bool(checked))
     if "error" in result:
         return jsonify(result), 400
-    return jsonify(result)
+    if bool(checked):
+        today = datetime.now().strftime("%Y-%m-%d")
+        headers = {'X-Internal-Token': config.INTERNAL_TOKEN}
+        if result.get('nra_binding'):
+            try:
+                requests.post('http://localhost:5000/api/nra',
+                              json={'items': [result['nra_binding']]},
+                              headers=headers, timeout=2)
+            except Exception as e:
+                logger.warning(f"NRA binding call failed: {e}")
+        if result.get('dwm_binding'):
+            try:
+                requests.post('http://localhost:5000/api/dwm/increment',
+                              json={'slug': result['dwm_binding'], 'delta': 1, 'date': today},
+                              headers=headers, timeout=2)
+            except Exception as e:
+                logger.warning(f"DWM binding call failed: {e}")
+    return jsonify({"status": "saved"})
 
 
 @app.route("/api/week/task", methods=["DELETE"])
@@ -132,10 +208,14 @@ def api_task_delete():
     section_idx = data.get("section_idx")
     if not date_str or not section or section_idx is None:
         return jsonify({"error": "date, section, section_idx required"}), 400
-    result = delete_task(date_str, section, int(section_idx))
+    scope = data.get("scope", "one")
+    if scope == "all":
+        result = delete_task_all_future(date_str, section, int(section_idx))
+    else:
+        result = delete_task(date_str, section, int(section_idx))
     if "error" in result:
         return jsonify(result), 400
-    logger.info(f"Task deleted: [{section}] idx {section_idx}")
+    logger.info(f"Task deleted: [{section}] idx {section_idx} scope={scope}")
     return jsonify(result)
 
 
@@ -249,6 +329,115 @@ def api_task_reorder():
     if "error" in result:
         return jsonify(result), 400
     return jsonify(result)
+
+
+@app.route("/api/week/bind-nra", methods=["POST"])
+@login_required
+def api_task_bind_nra():
+    data = request.get_json() or {}
+    date_str = data.get("date", "")
+    section = data.get("section", "")
+    section_idx = data.get("section_idx")
+    nra = data.get("nra", "")
+    if not date_str or not section or section_idx is None:
+        return jsonify({"error": "date, section, section_idx required"}), 400
+    result = set_task_binding(date_str, section, int(section_idx), 'nra_binding', nra)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/week/bind-dwm", methods=["POST"])
+@login_required
+def api_task_bind_dwm():
+    data = request.get_json() or {}
+    date_str = data.get("date", "")
+    section = data.get("section", "")
+    section_idx = data.get("section_idx")
+    dwm = data.get("dwm", "")
+    if not date_str or not section or section_idx is None:
+        return jsonify({"error": "date, section, section_idx required"}), 400
+    result = set_task_binding(date_str, section, int(section_idx), 'dwm_binding', dwm)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/week/step-toggle", methods=["POST"])
+@login_required
+def api_step_toggle():
+    data = request.get_json() or {}
+    date_str = data.get("date", "")
+    section = data.get("section", "")
+    section_idx = data.get("section_idx")
+    step_idx = data.get("step_idx")
+    checked = data.get("checked")
+    if not date_str or not section or section_idx is None or step_idx is None or checked is None:
+        return jsonify({"error": "date, section, section_idx, step_idx, checked required"}), 400
+    result = toggle_step(date_str, section, int(section_idx), int(step_idx), bool(checked))
+    if "error" in result:
+        return jsonify(result), 400
+    if result.get("auto_complete"):
+        toggle_result = toggle_task(date_str, section, int(section_idx), True)
+        today = datetime.now().strftime("%Y-%m-%d")
+        headers = {'X-Internal-Token': config.INTERNAL_TOKEN}
+        if toggle_result.get('nra_binding'):
+            try:
+                requests.post('http://localhost:5000/api/nra',
+                              json={'items': [toggle_result['nra_binding']]},
+                              headers=headers, timeout=2)
+            except Exception as e:
+                logger.warning(f"NRA binding call failed: {e}")
+        if toggle_result.get('dwm_binding'):
+            try:
+                requests.post('http://localhost:5000/api/dwm/increment',
+                              json={'slug': toggle_result['dwm_binding'], 'delta': 1, 'date': today},
+                              headers=headers, timeout=2)
+            except Exception as e:
+                logger.warning(f"DWM binding call failed: {e}")
+    return jsonify({"status": "saved", "auto_complete": result.get("auto_complete", False)})
+
+
+@app.route("/api/week/step-count", methods=["POST"])
+@login_required
+def api_step_count():
+    data = request.get_json() or {}
+    date_str = data.get("date", "")
+    section = data.get("section", "")
+    section_idx = data.get("section_idx")
+    count = data.get("count", 0)
+    if not date_str or not section or section_idx is None:
+        return jsonify({"error": "date, section, section_idx required"}), 400
+    result = set_step_count(date_str, section, int(section_idx), int(count))
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/proxy/nra", methods=["GET"])
+@login_required
+def api_proxy_nra():
+    try:
+        res = requests.get('http://localhost:5000/api/nra',
+                           headers={'X-Internal-Token': config.INTERNAL_TOKEN},
+                           timeout=3)
+        return jsonify(res.json())
+    except Exception as e:
+        logger.warning(f"NRA proxy failed: {e}")
+        return jsonify({"items": []}), 503
+
+
+@app.route("/api/proxy/dwm", methods=["GET"])
+@login_required
+def api_proxy_dwm():
+    try:
+        res = requests.get('http://localhost:5000/api/dwm',
+                           headers={'X-Internal-Token': config.INTERNAL_TOKEN},
+                           timeout=3)
+        return jsonify(res.json())
+    except Exception as e:
+        logger.warning(f"DWM proxy failed: {e}")
+        return jsonify({"periods": {}}), 503
 
 
 if __name__ == "__main__":

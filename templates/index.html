@@ -10,8 +10,16 @@
 
 {% block content %}
 <div class="page-header">
-    <a href="/logout" class="logout-btn">Logout</a>
-    <h1>Athena</h1>
+    <div class="page-header-right">
+        <button class="logout-btn" id="toggle-done-btn" title="Hide/show done">&#10003;</button>
+        <a href="#" class="logout-btn" onclick="navigateToQuanta();return false;">Quanta</a>
+        <a href="/logout" class="logout-btn">Logout</a>
+    </div>
+    <h1 style="display:flex;align-items:center;gap:10px">
+        <img src="/static/icons/athena.svg" style="width:28px;height:28px;display:block">
+        Athena
+    </h1>
+    <span class="week-num-label" style="display:block;margin-top:3px">{{ build_time }}</span>
 </div>
 
 <!-- Week navigation -->
@@ -28,8 +36,11 @@
 <div class="week-grid" id="week-grid"></div>
 
 <!-- Someday section -->
-<div class="wp-someday">
-    <div class="wp-someday-header">Someday</div>
+<div class="wp-someday" id="wp-someday">
+    <div class="wp-someday-header">
+        Someday
+        <button class="wp-day-eye" id="wp-someday-eye" title="Hide/show">&#9900;</button>
+    </div>
     <div class="wp-someday-tasks" id="someday-tasks"></div>
     <div class="wp-someday-add">
         <input type="text" class="wp-add-input" id="someday-add-input"
@@ -42,6 +53,12 @@
     <div class="wp-card-header">
         <input type="text" class="wp-card-title" id="wp-card-title" autocomplete="off">
         <button class="wp-card-close" id="wp-card-close">&#10005;</button>
+    </div>
+
+    <div class="wp-card-section">
+        <div class="wp-card-label">Steps</div>
+        <input type="number" id="wp-steps-count" class="wp-steps-count-input"
+               min="0" max="20" value="0" autocomplete="off">
     </div>
 
     <div class="wp-card-section">
@@ -81,10 +98,43 @@
         </div>
     </div>
 
+    <div class="wp-card-section" id="wp-card-links-section">
+        <div class="wp-card-label">Links</div>
+        <div class="wp-custom-recur-row" style="margin-bottom:6px">
+            <span class="wp-custom-recur-label">NRA</span>
+            <select id="wp-nra-select" class="wp-recur-unit-select">
+                <option value="">— none —</option>
+            </select>
+            <button id="wp-nra-clear" class="wp-card-action-btn" style="padding:3px 8px;font-size:0.75rem">×</button>
+        </div>
+        <div class="wp-custom-recur-row">
+            <span class="wp-custom-recur-label">DWM</span>
+            <select id="wp-dwm-select" class="wp-recur-unit-select">
+                <option value="">— none —</option>
+            </select>
+            <button id="wp-dwm-clear" class="wp-card-action-btn" style="padding:3px 8px;font-size:0.75rem">×</button>
+        </div>
+    </div>
+
     <div class="wp-card-section wp-card-actions">
         <button class="wp-card-action-btn" id="wp-card-duplicate">Duplicate</button>
         <button class="wp-card-action-btn" id="wp-card-attach">Attach&#8230;</button>
         <button class="wp-card-action-btn wp-card-danger" id="wp-card-delete">Delete</button>
+    </div>
+</div>
+
+<!-- Recurring delete modal -->
+<div class="wp-modal-overlay" id="wp-recur-delete-modal" style="display:none">
+    <div class="wp-modal-box">
+        <div class="wp-modal-title">Delete recurring task</div>
+        <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:14px">
+            This task repeats. Delete just this instance, or this and all future copies?
+        </div>
+        <div class="wp-modal-actions">
+            <button class="wp-modal-btn wp-modal-cancel" id="wp-recur-delete-cancel">Cancel</button>
+            <button class="wp-modal-btn" id="wp-recur-delete-one">This one</button>
+            <button class="wp-modal-btn wp-modal-confirm" id="wp-recur-delete-all">All future</button>
+        </div>
     </div>
 </div>
 
@@ -104,14 +154,26 @@
 
 {% block scripts %}
 <script>
+async function navigateToQuanta() {
+    const base = window.location.protocol + '//' + window.location.hostname + ':5000/';
+    try {
+        const res = await fetch('/api/auth-token');
+        if (!res.ok) throw new Error('failed');
+        const data = await res.json();
+        window.location.href = base + '?token=' + encodeURIComponent(data.token);
+    } catch {
+        window.location.href = base;
+    }
+}
+
 let currentWeekMonday = null;
 let activeCard = null;
 let cardNoteOriginal = '';
 let cardTitleOriginal = '';
 let somedaySortable = null;
-let pendingFocusSection = null;
 
 const COLLAPSED_KEY = 'athena-collapsed-days';
+const SOMEDAY_COLLAPSED_KEY = 'athena-someday-collapsed';
 
 function getCollapsedDays() {
     try { return JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]'); } catch { return []; }
@@ -141,6 +203,18 @@ function updateGridColumns() {
     document.getElementById('week-grid').style.gridTemplateColumns = template;
 }
 window.addEventListener('resize', updateGridColumns);
+
+function applySomedayCollapsed() {
+    const collapsed = localStorage.getItem(SOMEDAY_COLLAPSED_KEY) === '1';
+    document.getElementById('wp-someday').classList.toggle('collapsed', collapsed);
+}
+document.getElementById('wp-someday-eye').addEventListener('click', () => {
+    const el = document.getElementById('wp-someday');
+    const nowCollapsed = !el.classList.contains('collapsed');
+    localStorage.setItem(SOMEDAY_COLLAPSED_KEY, nowCollapsed ? '1' : '0');
+    el.classList.toggle('collapsed', nowCollapsed);
+});
+applySomedayCollapsed();
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
@@ -203,7 +277,9 @@ function renderWeek(data) {
         col.innerHTML = `<div class="day-header">
             <span class="day-name">${day.short}</span>
             <span class="day-date-num">${day.date_num}</span>
-            <button class="wp-day-eye" data-day="${day.name}" title="Hide/show">&#9900;</button>
+            <span class="day-header-btns">
+                <button class="wp-day-eye" data-day="${day.name}" title="Hide/show">&#9900;</button>
+            </span>
         </div>`;
 
         col.querySelector('.wp-day-eye').addEventListener('click', e => {
@@ -230,7 +306,7 @@ function renderWeek(data) {
             tasksDiv.appendChild(sep);
         }
 
-        day.tasks.forEach(task => {
+        day.items.forEach(task => {
             tasksDiv.appendChild(makeTaskEl(task, day.date_str, day.name));
         });
 
@@ -245,7 +321,7 @@ function renderWeek(data) {
         inp.autocomplete = 'off';
         inp.dataset.section = day.name;
         inp.dataset.date = day.date_str;
-        inp.addEventListener('keydown', e => {
+        inp.addEventListener('keyup', e => {
             if (e.key === 'Enter') handleAddTaskDirect(inp, inp.dataset.section, inp.dataset.date, true);
         });
         addDiv.appendChild(inp);
@@ -263,7 +339,7 @@ function renderWeek(data) {
     const newAdd = somedayAdd.cloneNode(true);
     somedayAdd.replaceWith(newAdd);
     newAdd.dataset.date = data.monday;
-    newAdd.addEventListener('keydown', e => {
+    newAdd.addEventListener('keyup', e => {
         if (e.key === 'Enter') handleAddTaskDirect(newAdd, 'Someday', data.monday, false);
     });
 
@@ -275,26 +351,21 @@ function renderWeek(data) {
         if (todayCol) setTimeout(() => todayCol.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
     }
 
-    // Focus next input if Enter was pressed to add a task
-    if (pendingFocusSection) {
-        const target = pendingFocusSection;
-        pendingFocusSection = null;
-        setTimeout(() => {
-            if (target === 'Someday') {
-                document.getElementById('someday-add-input')?.focus();
-            } else {
-                document.querySelector(`.wp-add-input[data-section="${target}"]`)?.focus();
-            }
-        }, 50);
-    }
-
     // Re-open card panel if it was open before reload
     if (savedCard) {
         let matchTask = null;
         data.days.forEach(day => {
             if (day.name === savedCard.section) {
-                const t = day.tasks.find(t => t.section_idx === savedCard.section_idx);
-                if (t) matchTask = { ...t, date_str: day.date_str, section: day.name };
+                for (const item of day.items) {
+                    if (item.type === 'task' && item.section_idx === savedCard.section_idx) {
+                        matchTask = { ...item, date_str: day.date_str, section: day.name };
+                        break;
+                    }
+                    if (item.type === 'block') {
+                        const t = item.tasks.find(t => t.section_idx === savedCard.section_idx);
+                        if (t) { matchTask = { ...t, date_str: day.date_str, section: day.name }; break; }
+                    }
+                }
             }
         });
         if (!matchTask && savedCard.section === 'Someday') {
@@ -314,20 +385,46 @@ function makeTaskEl(task, dateStr, section) {
     div.dataset.text = task.text;
     div.dataset.note = task.note || '';
     if (task.recur) div.dataset.recur = task.recur;
+    const steps = task.steps || [];
+    div.dataset.steps = JSON.stringify(steps);
+
+    const stepsTotal = steps.length;
+    const stepsDone = steps.filter(s => s).length;
+    const stepsBlocked = stepsTotal > 0 && !task.checked && stepsDone < stepsTotal;
 
     let badges = '';
     if (task.recur) badges += `<span class="wp-recur-badge" title="Recurring: ${esc(task.recur)}">&#8635;</span>`;
     if (task.attachment) badges += `<span class="wp-attach-badge" title="${esc(task.attachment)}">&#128206;</span>`;
     if (task.note) badges += `<span class="wp-note-dot">&#183;</span>`;
+    if (task.nra_binding || task.dwm_binding) badges += `<span class="wp-binding-badge" title="${esc([task.nra_binding, task.dwm_binding].filter(Boolean).join(' / '))}">&#8853;</span>`;
 
+    const checkAttrs = task.checked ? 'checked' : '';
+    const blockedClass = stepsBlocked ? ' steps-blocked' : '';
     div.innerHTML = `
         <div class="wp-task-row">
-            <span class="wp-drag-handle">&#8942;</span>
-            <input type="checkbox" class="wp-task-check" ${task.checked ? 'checked' : ''}>
+            <span class="wp-drag-handle">&#9776;</span>
+            <input type="checkbox" class="wp-task-check${blockedClass}" ${checkAttrs}>
             <span class="wp-task-text">${esc(task.text)}${badges}</span>
         </div>`;
 
-    div.querySelector('.wp-task-check').addEventListener('change', handleToggle);
+    if (!stepsBlocked) {
+        div.querySelector('.wp-task-check').addEventListener('change', handleToggle);
+    }
+
+    if (stepsTotal > 0) {
+        const stepsEl = document.createElement('div');
+        stepsEl.className = 'wp-inline-steps';
+        steps.forEach((checked, idx) => {
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.className = 'wp-inline-step-check';
+            cb.checked = !!checked;
+            cb.addEventListener('change', () => handleStepToggle(idx, cb.checked, div));
+            stepsEl.appendChild(cb);
+        });
+        div.appendChild(stepsEl);
+    }
+
     div.querySelector('.wp-task-text').addEventListener('click', () => {
         openCardPanel({
             text: task.text,
@@ -338,11 +435,15 @@ function makeTaskEl(task, dateStr, section) {
             recur: div.dataset.recur || null,
             attachment: task.attachment || null,
             is_someday: section === 'Someday',
+            nra_binding: task.nra_binding || null,
+            dwm_binding: task.dwm_binding || null,
+            steps: steps,
         });
     });
 
     return div;
 }
+
 
 function initSortables(mondayStr) {
     if (typeof Sortable === 'undefined') return;
@@ -357,62 +458,66 @@ function initSortables(mondayStr) {
         const taskEl = evt.item;
 
         if (fromEl === toEl) {
-            const items = Array.from(fromEl.querySelectorAll('.wp-task-item')).map(el => el.dataset.text);
+            // Reorder within same container
+            const orderedTexts = Array.from(fromEl.querySelectorAll('.wp-task-item')).map(el => el.dataset.text);
             await fetchApi('/api/week/reorder', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ date: fromEl.dataset.date, section: fromEl.dataset.section, items }),
+                body: JSON.stringify({ date: fromEl.dataset.date, section: fromEl.dataset.section, ordered: orderedTexts }),
             });
         } else {
+            // Cross-container drag (different day or Someday)
             const text = taskEl.dataset.text;
             const srcDate = fromEl.dataset.date;
             const srcSection = fromEl.dataset.section;
             const srcSectionIdx = parseInt(taskEl.dataset.sectionIdx);
             const dstDate = toEl.dataset.date;
             const dstSection = toEl.dataset.section;
-
+            const note = taskEl.dataset.note || '';
             await fetchApi('/api/week/task', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ date: srcDate, section: srcSection, section_idx: srcSectionIdx }),
             });
-            const note = taskEl.dataset.note || '';
             await fetchApi('/api/week/task', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ date: dstDate, section: dstSection, text, note: note || undefined }),
             });
-            const dstItems = Array.from(toEl.querySelectorAll('.wp-task-item')).map(el => el.dataset.text);
+            const dstTexts = Array.from(toEl.querySelectorAll('.wp-task-item')).map(el => el.dataset.text);
             await fetchApi('/api/week/reorder', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ date: dstDate, section: dstSection, items: dstItems }),
+                body: JSON.stringify({ date: dstDate, section: dstSection, ordered: dstTexts }),
             });
         }
         loadWeek(currentWeekMonday);
     }
 
+    const isTouch = window.matchMedia('(pointer: coarse)').matches;
+    const group = 'week-tasks';
+    const baseOpts = {
+        group,
+        animation: 150,
+        ghostClass: 'sortable-ghost',
+        chosenClass: 'sortable-chosen',
+        delay: 200,
+        delayOnTouchOnly: true,
+        touchStartThreshold: 5,
+        filter: '.wp-recurring-item, .wp-task-sep',
+        onEnd: onSortEnd,
+    };
+
     document.querySelectorAll('.day-tasks').forEach(list => {
-        Sortable.create(list, {
-            group: 'week-tasks',
-            animation: 150,
-            handle: '.wp-drag-handle',
-            filter: '.wp-recurring-item, .wp-task-sep',
-            ghostClass: 'sortable-ghost',
-            chosenClass: 'sortable-chosen',
-            onEnd: onSortEnd,
-        });
+        const opts = { ...baseOpts };
+        if (!isTouch) opts.handle = '.wp-drag-handle';
+        Sortable.create(list, opts);
     });
 
     if (somedaySortable) { somedaySortable.destroy(); somedaySortable = null; }
-    somedaySortable = Sortable.create(somedayEl, {
-        group: 'week-tasks',
-        animation: 150,
-        handle: '.wp-drag-handle',
-        ghostClass: 'sortable-ghost',
-        chosenClass: 'sortable-chosen',
-        onEnd: onSortEnd,
-    });
+    const somedayOpts = { ...baseOpts };
+    if (!isTouch) somedayOpts.handle = '.wp-drag-handle';
+    somedaySortable = Sortable.create(somedayEl, somedayOpts);
 }
 
 // ── Task Actions ─────────────────────────────────────────────────────────────
@@ -434,17 +539,17 @@ async function handleAddTaskDirect(input, section, dateStr, advanceFocus) {
     if (!text) return;
     input.value = '';
     input.disabled = true;
-    if (advanceFocus) {
-        const idx = DAY_ORDER.indexOf(section);
-        pendingFocusSection = idx >= 0 && idx < DAY_ORDER.length - 1 ? DAY_ORDER[idx + 1] : section;
-    }
     try {
         await fetchApi('/api/week/task', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ date: dateStr, section, text }),
         });
-        loadWeek(currentWeekMonday);
+        await loadWeek(currentWeekMonday);
+        const sameInput = section === 'Someday'
+            ? document.getElementById('someday-add-input')
+            : document.querySelector(`.wp-add-input[data-section="${section}"]`);
+        sameInput?.focus();
     } finally {
         input.disabled = false;
     }
@@ -506,6 +611,9 @@ function openCardPanel(task) {
         section_idx: task.section_idx,
         recur: task.recur || null,
         is_someday: task.is_someday || task.section === 'Someday',
+        nra_binding: task.nra_binding || null,
+        dwm_binding: task.dwm_binding || null,
+        steps: task.steps ? JSON.parse(JSON.stringify(task.steps)) : [],
     };
 
     const titleEl = document.getElementById('wp-card-title');
@@ -537,8 +645,10 @@ function openCardPanel(task) {
         hideCustomRecur();
     }
 
+    document.getElementById('wp-steps-count').value = activeCard.steps.length;
     document.getElementById('wp-card-defer-section').style.display = activeCard.is_someday ? 'none' : '';
     document.getElementById('wp-card-panel').style.display = 'block';
+    loadBindingOptions();
 }
 
 async function saveCardTitle() {
@@ -680,20 +790,44 @@ document.getElementById('wp-card-attach').addEventListener('click', async () => 
 
 document.getElementById('wp-card-delete').addEventListener('click', async () => {
     if (!activeCard) return;
+    if (activeCard.recur) {
+        document.getElementById('wp-recur-delete-modal').style.display = 'flex';
+    } else {
+        const { date_str, section, section_idx } = activeCard;
+        closeCardPanel();
+        await fetchApi('/api/week/task', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date: date_str, section, section_idx }),
+        });
+        loadWeek(currentWeekMonday);
+    }
+});
+
+async function _doRecurDelete(scope) {
+    document.getElementById('wp-recur-delete-modal').style.display = 'none';
+    if (!activeCard) return;
     const { date_str, section, section_idx } = activeCard;
     closeCardPanel();
     await fetchApi('/api/week/task', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: date_str, section, section_idx }),
+        body: JSON.stringify({ date: date_str, section, section_idx, scope }),
     });
     loadWeek(currentWeekMonday);
+}
+
+document.getElementById('wp-recur-delete-cancel').addEventListener('click', () => {
+    document.getElementById('wp-recur-delete-modal').style.display = 'none';
 });
+document.getElementById('wp-recur-delete-one').addEventListener('click', () => _doRecurDelete('one'));
+document.getElementById('wp-recur-delete-all').addEventListener('click', () => _doRecurDelete('all'));
 
 document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
         closeCardPanel();
         document.getElementById('wp-attach-modal').style.display = 'none';
+        document.getElementById('wp-recur-delete-modal').style.display = 'none';
     }
 });
 
@@ -704,6 +838,195 @@ document.addEventListener('click', e => {
         !e.target.closest('#wp-attach-modal')) {
         closeCardPanel();
     }
+});
+
+// ── Steps ─────────────────────────────────────────────────────────────────────
+
+async function handleStepToggle(stepIdx, checked, taskEl) {
+    const steps = JSON.parse(taskEl.dataset.steps);
+    steps[stepIdx] = checked ? 1 : 0;
+    taskEl.dataset.steps = JSON.stringify(steps);
+    await fetchApi('/api/week/step-toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            date: taskEl.dataset.date,
+            section: taskEl.dataset.section,
+            section_idx: parseInt(taskEl.dataset.sectionIdx),
+            step_idx: stepIdx,
+            checked,
+        }),
+    });
+    await loadWeek(currentWeekMonday);
+}
+
+async function setStepCount(count) {
+    if (!activeCard) return;
+    const n = Math.max(0, parseInt(count) || 0);
+    await fetchApi('/api/week/step-count', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            date: activeCard.date_str,
+            section: activeCard.section,
+            section_idx: activeCard.section_idx,
+            count: n,
+        }),
+    });
+    await loadWeek(currentWeekMonday);
+}
+
+document.getElementById('wp-steps-count').addEventListener('change', function () {
+    setStepCount(this.value);
+});
+
+// ── Hide Done ─────────────────────────────────────────────────────────────────
+
+const HIDE_DONE_KEY = 'athena-hide-done';
+let lastShake = 0;
+
+function shakeHandler(e) {
+    const acc = e.accelerationIncludingGravity;
+    if (!acc) return;
+    const { x, y, z } = acc;
+    const mag = Math.sqrt(x*x + y*y + z*z);
+    if (mag > 15 && Date.now() - lastShake > 1000) {
+        lastShake = Date.now();
+        toggleHideDone();
+    }
+}
+
+if (window.DeviceMotionEvent) {
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+        // iOS 13+ — hook into the first toggle button tap to request permission
+        document.addEventListener('click', async function iosMotionPermission(e) {
+            if (!e.target.closest('#toggle-done-btn')) return;
+            document.removeEventListener('click', iosMotionPermission, true);
+            try {
+                const perm = await DeviceMotionEvent.requestPermission();
+                if (perm === 'granted') window.addEventListener('devicemotion', shakeHandler);
+            } catch (_) {}
+        }, true);
+    } else {
+        window.addEventListener('devicemotion', shakeHandler);
+    }
+}
+
+function getHideDone() {
+    return localStorage.getItem(HIDE_DONE_KEY) === 'true';
+}
+
+function toggleHideDone() {
+    localStorage.setItem(HIDE_DONE_KEY, String(!getHideDone()));
+    applyHideDone();
+}
+
+function applyHideDone() {
+    const hideDone = getHideDone();
+    document.body.classList.toggle('hide-done', hideDone);
+    const btn = document.getElementById('toggle-done-btn');
+    if (btn) btn.classList.toggle('active', hideDone);
+}
+
+document.getElementById('toggle-done-btn').addEventListener('click', toggleHideDone);
+
+// ── Binding Options ────────────────────────────────────────────────────────────
+
+async function loadBindingOptions() {
+    const nraSelect = document.getElementById('wp-nra-select');
+    const dwmSelect = document.getElementById('wp-dwm-select');
+
+    nraSelect.innerHTML = '<option value="">— none —</option>';
+    dwmSelect.innerHTML = '<option value="">— none —</option>';
+
+    try {
+        const res = await fetchApi('/api/proxy/nra');
+        if (res && res.ok) {
+            const data = await res.json();
+            (data.items || []).forEach(item => {
+                const opt = document.createElement('option');
+                opt.value = item.text;
+                opt.textContent = item.text;
+                nraSelect.appendChild(opt);
+            });
+        }
+    } catch (e) { /* duo-brain unavailable */ }
+    nraSelect.value = activeCard?.nra_binding || '';
+
+    try {
+        const res = await fetchApi('/api/proxy/dwm');
+        if (res && res.ok) {
+            const data = await res.json();
+            const periods = data.periods || {};
+            ['daily', 'weekly', 'monthly'].forEach(period => {
+                (periods[period]?.challenges || []).forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.slug;
+                    opt.textContent = `[${period[0].toUpperCase()}] ${c.name}`;
+                    dwmSelect.appendChild(opt);
+                });
+            });
+        }
+    } catch (e) { /* duo-brain unavailable */ }
+    dwmSelect.value = activeCard?.dwm_binding || '';
+}
+
+document.getElementById('wp-nra-select').addEventListener('change', async function () {
+    if (!activeCard) return;
+    activeCard.nra_binding = this.value || null;
+    await fetchApi('/api/week/bind-nra', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            date: activeCard.date_str, section: activeCard.section,
+            section_idx: activeCard.section_idx, nra: this.value,
+        }),
+    });
+    loadWeek(currentWeekMonday);
+});
+
+document.getElementById('wp-nra-clear').addEventListener('click', async () => {
+    if (!activeCard) return;
+    document.getElementById('wp-nra-select').value = '';
+    activeCard.nra_binding = null;
+    await fetchApi('/api/week/bind-nra', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            date: activeCard.date_str, section: activeCard.section,
+            section_idx: activeCard.section_idx, nra: '',
+        }),
+    });
+    loadWeek(currentWeekMonday);
+});
+
+document.getElementById('wp-dwm-select').addEventListener('change', async function () {
+    if (!activeCard) return;
+    activeCard.dwm_binding = this.value || null;
+    await fetchApi('/api/week/bind-dwm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            date: activeCard.date_str, section: activeCard.section,
+            section_idx: activeCard.section_idx, dwm: this.value,
+        }),
+    });
+    loadWeek(currentWeekMonday);
+});
+
+document.getElementById('wp-dwm-clear').addEventListener('click', async () => {
+    if (!activeCard) return;
+    document.getElementById('wp-dwm-select').value = '';
+    activeCard.dwm_binding = null;
+    await fetchApi('/api/week/bind-dwm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            date: activeCard.date_str, section: activeCard.section,
+            section_idx: activeCard.section_idx, dwm: '',
+        }),
+    });
+    loadWeek(currentWeekMonday);
 });
 
 // ── Attach Modal ──────────────────────────────────────────────────────────────
@@ -747,6 +1070,7 @@ document.getElementById('next-week').addEventListener('click', () => {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
+applyHideDone();
 loadWeek(todayStr());
 </script>
 {% endblock %}

@@ -87,13 +87,21 @@ body {
     color: var(--accent);
 }
 
-.logout-btn {
+.page-header-right {
     position: absolute;
     top: var(--spacing);
     right: 0;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.logout-btn {
+    position: static;
     padding: 8px 12px;
     background: transparent;
     border: 1px solid var(--border);
+    border-radius: var(--border-radius);
     color: var(--text-secondary);
     font-size: 0.625rem;
     font-family: var(--font-mono);
@@ -108,6 +116,11 @@ body {
 .logout-btn:active {
     border-color: var(--text-primary);
     color: var(--text-primary);
+}
+
+#toggle-done-btn.active {
+    color: var(--accent);
+    border-color: var(--accent);
 }
 
 /* Status messages */
@@ -359,7 +372,7 @@ input[type="text"]:focus {
 .day-tasks {
     flex: 1;
     padding: 3px 2px;
-    min-height: 50px;
+    min-height: 40px;
 }
 
 @media (max-width: 819px) {
@@ -387,6 +400,9 @@ input[type="text"]:focus {
     opacity: 0.6;
 }
 
+/* Hide completed tasks */
+.hide-done .wp-task-item.checked { display: none; }
+
 .wp-task-item.sortable-ghost { opacity: 0.3; background: #1a1a1a; }
 .wp-task-item.sortable-chosen { background: #151515; outline: 1px dashed var(--border); }
 
@@ -396,14 +412,23 @@ input[type="text"]:focus {
     gap: 4px;
 }
 
-/* Mobile: check on the right, hide drag handle */
+/* Mobile: check on the right */
 @media (max-width: 819px) {
     .wp-task-row {
         flex-direction: row-reverse;
         align-items: center;
         gap: 10px;
     }
-    .wp-drag-handle { display: none; }
+    .wp-drag-handle {
+        font-size: 1.25rem;
+        color: #555;
+        opacity: 0.5;
+        padding: 4px 8px;
+        cursor: grab;
+        touch-action: none;
+        line-height: 1;
+        letter-spacing: normal;
+    }
 }
 
 .wp-note-dot {
@@ -479,6 +504,14 @@ input[type="text"]:focus {
     vertical-align: middle;
 }
 
+.wp-binding-badge {
+    font-size: 0.5rem;
+    color: #88aaff;
+    opacity: 0.7;
+    margin-left: 3px;
+    vertical-align: super;
+}
+
 /* Global recurring items */
 .wp-recurring-item {
     display: flex;
@@ -534,6 +567,9 @@ input[type="text"]:focus {
 }
 
 .wp-someday-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     font-size: 0.5625rem;
     font-weight: 700;
     letter-spacing: 0.2em;
@@ -542,7 +578,16 @@ input[type="text"]:focus {
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
     text-transform: uppercase;
+    cursor: pointer;
 }
+
+.wp-someday.collapsed .wp-someday-tasks,
+.wp-someday.collapsed .wp-someday-add { display: none; }
+.wp-someday.collapsed { border-bottom: none; }
+.wp-someday.collapsed .wp-someday-header { border-bottom: none; }
+.wp-someday-header .wp-day-eye { opacity: 0.4; }
+.wp-someday-header:hover .wp-day-eye { opacity: 0.7; }
+.wp-someday.collapsed .wp-someday-header .wp-day-eye { opacity: 0.6; }
 
 .wp-someday-tasks { padding: 3px 2px; min-height: 36px; }
 
@@ -655,7 +700,7 @@ input[type="text"]:focus {
     padding: 4px 8px;
     color: var(--text-secondary);
     font-family: var(--font-mono);
-    font-size: 0.6875rem;
+    font-size: 0.875rem;
     line-height: 1.55;
     resize: none;
     outline: none;
@@ -682,9 +727,9 @@ input[type="text"]:focus {
     border: 1px solid #2a2a2a;
     color: var(--text-secondary);
     font-family: var(--font-mono);
-    font-size: 0.5625rem;
+    font-size: 0.8125rem;
     letter-spacing: 0.06em;
-    padding: 4px 8px;
+    padding: 6px 12px;
     cursor: pointer;
     transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
@@ -705,7 +750,7 @@ input[type="text"]:focus {
 }
 
 .wp-custom-recur-label {
-    font-size: 0.5625rem;
+    font-size: 0.8125rem;
     color: var(--text-secondary);
     letter-spacing: 0.06em;
     flex-shrink: 0;
@@ -717,8 +762,8 @@ input[type="text"]:focus {
     border: 1px solid #2a2a2a;
     color: var(--text-primary);
     font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    padding: 4px 6px;
+    font-size: 0.875rem;
+    padding: 5px 6px;
     outline: none;
     text-align: center;
     -moz-appearance: textfield;
@@ -733,8 +778,8 @@ input[type="text"]:focus {
     border: 1px solid #2a2a2a;
     color: var(--text-primary);
     font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    padding: 4px 6px;
+    font-size: 0.875rem;
+    padding: 5px 6px;
     outline: none;
     cursor: pointer;
     flex: 1;
@@ -816,3 +861,49 @@ input[type="text"]:focus {
 .wp-modal-cancel  { background: transparent; color: var(--text-secondary); }
 .wp-modal-cancel:hover { border-color: var(--text-secondary); color: var(--text-primary); }
 .wp-modal-confirm { background: var(--accent); color: #000; border-color: var(--accent); }
+
+/* ── Steps ──────────────────────────────────────────────────────────────── */
+
+.wp-steps-count-input {
+    background: transparent;
+    border: none;
+    border-bottom: 1px dashed var(--border);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    outline: none;
+    width: 48px;
+    padding: 2px 0;
+    transition: border-color 0.15s;
+}
+
+.wp-steps-count-input:focus { border-bottom-color: var(--accent); }
+
+.wp-inline-steps {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 0 3px 22px;
+}
+
+.wp-inline-step-check {
+    accent-color: var(--accent);
+    cursor: pointer;
+    width: 12px;
+    height: 12px;
+}
+
+.wp-task-check.steps-blocked {
+    opacity: 0.25;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* ── Blocks ──────────────────────────────────────────────────────────────── */
+
+.day-header-btns {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+

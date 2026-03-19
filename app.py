@@ -13,6 +13,7 @@ from daemons.weekplan import (
     get_or_create_week, add_task, toggle_task, delete_task, delete_task_all_future,
     set_task_recur, defer_task, duplicate_task, attach_file, reorder_section,
     set_task_note, rename_task, set_task_binding, toggle_step, set_step_count,
+    set_task_color,
 )
 
 logging.basicConfig(
@@ -322,10 +323,26 @@ def api_task_reorder():
     data = request.get_json() or {}
     date_str = data.get("date", "")
     section = data.get("section", "")
-    items = data.get("items", [])
+    items = data.get("ordered", [])
     if not date_str or not section:
         return jsonify({"error": "date, section required"}), 400
     result = reorder_section(date_str, section, items)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/week/color", methods=["POST"])
+@login_required
+def api_set_color():
+    data = request.get_json() or {}
+    date_str = data.get("date", "")
+    section = data.get("section", "")
+    section_idx = data.get("section_idx")
+    color = data.get("color", "")
+    if not date_str or not section or section_idx is None:
+        return jsonify({"error": "date, section, section_idx required"}), 400
+    result = set_task_color(date_str, section, int(section_idx), color)
     if "error" in result:
         return jsonify(result), 400
     return jsonify(result)

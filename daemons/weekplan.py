@@ -72,7 +72,7 @@ def init_db():
                 conn.execute(f'ALTER TABLE tasks ADD COLUMN {col} TEXT')
             except Exception:
                 pass
-        for col in ('steps TEXT', 'block_id TEXT'):
+        for col in ('steps TEXT', 'block_id TEXT', 'color TEXT'):
             try:
                 conn.execute(f'ALTER TABLE tasks ADD COLUMN {col}')
             except Exception:
@@ -132,6 +132,7 @@ def _row_to_task(row, section_idx: int) -> dict:
         "nra_binding": row["nra_binding"],
         "dwm_binding": row["dwm_binding"],
         "steps":       json.loads(row["steps"]) if row["steps"] else [],
+        "color":       row["color"],
     }
 
 
@@ -508,6 +509,12 @@ def defer_task(date_str: str, section: str, section_idx: int, defer_to: str) -> 
                 return {"error": "Already in Someday backlog"}
             next_mon = date.fromisoformat(week_monday) + timedelta(days=7)
             target_monday, target_section = next_mon.isoformat(), "Monday"
+
+        elif defer_to == "weekend":
+            if section == "Someday":
+                return {"error": "Cannot defer Someday task to weekend"}
+            target_monday, target_section = week_monday, "Saturday"
+
         else:
             return {"error": f"Unknown defer_to: {defer_to}"}
 
@@ -581,6 +588,19 @@ def set_task_binding(date_str: str, section: str, section_idx: int, binding_type
             return {"error": "Task not found"}
         conn.execute(f"UPDATE tasks SET {binding_type}=? WHERE id=?",
                      (value.strip() or None, task["id"]))
+    return {"status": "saved"}
+
+
+def set_task_color(date_str: str, section: str, section_idx: int, color: str) -> dict:
+    if section not in SECTIONS:
+        return {"error": "Invalid section"}
+    week_monday = _get_monday(date_str)
+    with get_db() as conn:
+        task = _get_task_by_idx(conn, week_monday, section, section_idx)
+        if not task:
+            return {"error": "Task not found"}
+        conn.execute("UPDATE tasks SET color=? WHERE id=?",
+                     (color.strip() or None, task["id"]))
     return {"status": "saved"}
 
 

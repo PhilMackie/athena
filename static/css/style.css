@@ -942,3 +942,285 @@ input[type="text"]:focus {
     border: 1px dashed #444;
 }
 
+/* ===== Owl glitch — go-to-today ===== */
+#owl-logo {
+    cursor: pointer;
+    display: block;
+    opacity: 0.85;
+    animation: owl-ambient 4s infinite;
+}
+
+@keyframes owl-ambient {
+    0%, 100% {
+        opacity: 0.85;
+        transform: translateX(0) translateY(0);
+        filter: none;
+    }
+    5% {
+        opacity: 0.8;
+        transform: translateX(1px) translateY(-0.5px);
+    }
+    10% {
+        opacity: 0.9;
+        transform: translateX(-1px) translateY(0.5px);
+        filter: drop-shadow(-1px 0 rgba(255,0,0,0.15)) drop-shadow(1px 0 rgba(0,255,255,0.15));
+    }
+    15% {
+        opacity: 0.85;
+        transform: translateX(0) translateY(0);
+        filter: none;
+    }
+    47% { opacity: 0.85; transform: translateX(0); }
+    48% {
+        opacity: 0.75;
+        transform: translateX(2px) translateY(-1px) skewX(0.5deg);
+        filter: drop-shadow(-2px 0 rgba(255,0,0,0.2)) drop-shadow(2px 0 rgba(0,255,255,0.2));
+    }
+    49% { opacity: 0.88; transform: translateX(-1px) translateY(0.5px) skewX(-0.3deg); }
+    50% { opacity: 0.85; transform: translateX(0) translateY(0); filter: none; }
+    82% { opacity: 0.85; transform: translateX(0); }
+    83% {
+        opacity: 0.8;
+        transform: translateX(-1px) translateY(0.5px);
+        filter: drop-shadow(1px 0 rgba(255,0,0,0.1));
+    }
+    84% { opacity: 0.85; transform: translateX(0) translateY(0); filter: none; }
+}
+
+@keyframes owl-glitch {
+    0%   { filter: none; transform: scale(1) translateX(0); }
+    12%  { filter: brightness(3) hue-rotate(90deg) saturate(4); transform: scale(1.15) translateX(-3px); }
+    24%  { filter: brightness(0.4) hue-rotate(200deg) saturate(8); transform: scale(0.9) translateX(4px) skewX(-6deg); }
+    36%  { filter: brightness(2.5) hue-rotate(300deg); transform: scale(1.08) translateX(-2px) skewX(3deg); }
+    50%  { filter: drop-shadow(0 0 10px #b967ff) drop-shadow(0 0 4px #0ff) brightness(1.8); transform: scale(1.05); }
+    70%  { filter: drop-shadow(0 0 5px #b967ff) brightness(1.2); transform: scale(1.02); }
+    100% { filter: none; transform: scale(1) translateX(0); }
+}
+
+@keyframes screen-glitch {
+    0%   { opacity: 0; transform: translateX(0) skewX(0); }
+    10%  { opacity: 0.18; transform: translateX(-5px) skewX(-1.5deg); }
+    18%  { opacity: 0.06; transform: translateX(4px) skewX(0.5deg); }
+    26%  { opacity: 0.22; transform: translateX(-3px) skewX(1deg); }
+    35%  { opacity: 0.04; transform: translateX(2px); }
+    45%  { opacity: 0; transform: translateX(0); }
+    100% { opacity: 0; }
+}
+
+#owl-logo.glitch-active {
+    animation: owl-glitch 0.45s linear forwards;
+    opacity: 1;
+}
+
+#screen-glitch-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 10000;
+    background: linear-gradient(
+        160deg,
+        rgba(185, 103, 255, 0.35) 0%,
+        transparent 35%,
+        rgba(0, 255, 255, 0.2) 65%,
+        transparent 100%
+    );
+    opacity: 0;
+}
+
+#screen-glitch-overlay.glitch-active {
+    animation: screen-glitch 0.45s linear forwards;
+}
+
+/* ===== Birthday modal ===== */
+#birthday-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    background: rgba(0,0,0,0.92);
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+}
+#birthday-modal.open { display: flex; }
+
+.bday-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px 10px;
+    border-bottom: 1px solid #2a2a3a;
+    flex-shrink: 0;
+}
+.bday-modal-header h2 {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #b967ff;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin: 0;
+}
+.bday-modal-close {
+    background: transparent;
+    border: 1px solid #333;
+    color: #aaa;
+    font-size: 1.1rem;
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.bday-modal-close:hover { border-color: #b967ff; color: #b967ff; }
+
+.bday-add-form {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 10px 18px;
+    border-bottom: 1px solid #1e1e2e;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+.bday-add-form input {
+    background: #111;
+    border: 1px solid #333;
+    color: #e0e0e0;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 5px 8px;
+    outline: none;
+    border-radius: 2px;
+}
+.bday-add-form input:focus { border-color: #b967ff; }
+.bday-add-form input[name="bday-name"] { flex: 2; min-width: 100px; }
+.bday-add-form input[name="bday-month"],
+.bday-add-form input[name="bday-day"]  { width: 48px; text-align: center; }
+.bday-add-form input[name="bday-year"] { width: 60px; text-align: center; }
+.bday-add-btn {
+    background: #b967ff22;
+    border: 1px solid #b967ff;
+    color: #b967ff;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 5px 12px;
+    cursor: pointer;
+    border-radius: 2px;
+    white-space: nowrap;
+}
+.bday-add-btn:hover { background: #b967ff44; }
+
+.bday-bulk-bar {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 18px;
+    background: #0e0e1a;
+    border-bottom: 1px solid #2a2a3a;
+    font-size: 0.75rem;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+.bday-bulk-bar.visible { display: flex; }
+.bday-bulk-count { color: #b967ff; font-weight: 700; }
+.bday-bulk-select {
+    background: #111;
+    border: 1px solid #333;
+    color: #e0e0e0;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 4px 8px;
+    cursor: pointer;
+    outline: none;
+}
+.bday-bulk-select:focus { border-color: #b967ff; }
+.bday-bulk-apply {
+    background: #b967ff22;
+    border: 1px solid #b967ff;
+    color: #b967ff;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    cursor: pointer;
+    border-radius: 2px;
+}
+.bday-bulk-apply:hover { background: #b967ff44; }
+.bday-bulk-clear {
+    background: transparent;
+    border: 1px solid #444;
+    color: #888;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 4px 8px;
+    cursor: pointer;
+    border-radius: 2px;
+    margin-left: auto;
+}
+.bday-bulk-clear:hover { color: #ccc; border-color: #888; }
+
+.bday-table-wrap {
+    overflow-y: auto;
+    flex: 1;
+    padding: 0 18px 18px;
+}
+.bday-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+}
+.bday-table th {
+    text-align: left;
+    color: #888;
+    font-weight: 400;
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 8px 6px 6px;
+    border-bottom: 1px solid #222;
+    white-space: nowrap;
+}
+.bday-table td {
+    padding: 7px 6px;
+    border-bottom: 1px solid #1a1a2a;
+    vertical-align: middle;
+}
+.bday-table tr:hover td { background: #0d0d1a; }
+.bday-table tr.selected td { background: #14001f; }
+.bday-row-check { accent-color: #b967ff; cursor: pointer; }
+.bday-name-cell { color: #e0e0e0; }
+.bday-date-cell { color: #aaa; white-space: nowrap; }
+.bday-age-cell  { color: #666; text-align: right; padding-right: 14px; }
+.bday-next-cell { color: #b967ff; white-space: nowrap; font-size: 0.72rem; }
+.bday-reminder-badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-size: 0.68rem;
+    background: #1a1a2a;
+    color: #888;
+    border: 1px solid #2a2a3a;
+    white-space: nowrap;
+}
+.bday-reminder-badge.set {
+    background: #1a0030;
+    color: #b967ff;
+    border-color: #6a30aa;
+}
+.bday-del-btn {
+    background: transparent;
+    border: none;
+    color: #444;
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 2px;
+}
+.bday-del-btn:hover { color: #ff4444; background: #1a0000; }
+.bday-empty { color: #555; font-size: 0.8rem; text-align: center; padding: 24px; }
+
+@media (max-width: 600px) {
+    .bday-age-cell, .bday-next-cell { display: none; }
+    .bday-add-form input[name="bday-year"] { display: none; }
+}
+

@@ -67,6 +67,17 @@ def init_db():
                 name TEXT PRIMARY KEY
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS birthdays (
+                id           TEXT PRIMARY KEY,
+                name         TEXT NOT NULL,
+                birth_month  INTEGER NOT NULL,
+                birth_day    INTEGER NOT NULL,
+                birth_year   INTEGER,
+                reminder_days INTEGER,
+                created_at   TEXT NOT NULL
+            )
+        """)
         for col in ('nra_binding', 'dwm_binding'):
             try:
                 conn.execute(f'ALTER TABLE tasks ADD COLUMN {col} TEXT')
@@ -77,6 +88,10 @@ def init_db():
                 conn.execute(f'ALTER TABLE tasks ADD COLUMN {col}')
             except Exception:
                 pass
+        # Seed birthday data (one-time)
+        if not conn.execute("SELECT 1 FROM migrations WHERE name='seed_birthdays'").fetchone():
+            _seed_birthdays(conn)
+            conn.execute("INSERT INTO migrations VALUES ('seed_birthdays')")
         # Migrate any Someday tasks that are scattered across week_monday values
         conn.execute(
             "UPDATE tasks SET week_monday=? WHERE section='Someday' AND week_monday!=?",
@@ -123,6 +138,7 @@ def _normalize_positions(conn, week_monday: str, section: str):
 
 def _row_to_task(row, section_idx: int) -> dict:
     return {
+        "type":        "task",
         "text":        row["text"],
         "checked":     bool(row["checked"]),
         "section_idx": section_idx,
@@ -228,7 +244,11 @@ def get_or_create_week(date_str: str) -> dict:
         ).fetchone()
 
         if not carry_done:
-            carry = []
+            # Collect the most recent instance of each unique recurring task,
+            # scanning back up to 52 weeks. Stopping at the first week with
+            # any recurring tasks misses longer-interval tasks (e.g. biweekly)
+            # that were skipped in the most recent week.
+            seen = {}  # (text, section, recur) -> row
             for weeks_back in range(1, 53):
                 candidate = (monday - timedelta(days=7 * weeks_back)).isoformat()
                 rows = conn.execute(
@@ -236,9 +256,11 @@ def get_or_create_week(date_str: str) -> dict:
                        ORDER BY section, position""",
                     (candidate,),
                 ).fetchall()
-                if rows:
-                    carry = rows
-                    break
+                for row in rows:
+                    key = (row["text"], row["section"], row["recur"])
+                    if key not in seen:
+                        seen[key] = row
+            carry = list(seen.values())
 
             now = datetime.utcnow().isoformat()
             inserted = set()
@@ -272,6 +294,42 @@ def get_or_create_week(date_str: str) -> dict:
             conn.execute(
                 "INSERT OR IGNORE INTO weeks_initialized VALUES (?)", (week_monday,)
             )
+
+        # Birthday reminders — runs every load so newly-set reminders appear immediately
+        now_bday = datetime.utcnow().isoformat()
+        bdays = conn.execute(
+            "SELECT * FROM birthdays WHERE reminder_days IS NOT NULL"
+        ).fetchall()
+        for bday in bdays:
+            for yr_offset in (0, 1):
+                try:
+                    bday_date = date(monday.year + yr_offset,
+                                     bday['birth_month'], bday['birth_day'])
+                except ValueError:
+                    continue
+                reminder_date = bday_date - timedelta(days=bday['reminder_days'])
+                if monday <= reminder_date <= sunday:
+                    day_name = DAY_NAMES[reminder_date.weekday()]
+                    n = bday['reminder_days']
+                    if n == 0:
+                        text = f"🎂 {bday['name']}'s birthday today!"
+                    elif n == 1:
+                        text = f"🎂 {bday['name']}'s birthday tomorrow"
+                    else:
+                        text = f"🎂 {bday['name']}'s birthday in {n} days"
+                    already = conn.execute(
+                        "SELECT 1 FROM tasks WHERE week_monday=? AND section=? AND text=?",
+                        (week_monday, day_name, text),
+                    ).fetchone()
+                    if not already:
+                        conn.execute(
+                            """INSERT INTO tasks
+                               (id, week_monday, section, position, text, checked, created_at)
+                               VALUES (?,?,?,999,?,0,?)""",
+                            (str(uuid.uuid4()), week_monday, day_name, text, now_bday),
+                        )
+                        _normalize_positions(conn, week_monday, day_name)
+                    break
 
         rows = conn.execute(
             "SELECT * FROM tasks WHERE week_monday=? AND section!='Someday' ORDER BY section, position",
@@ -415,6 +473,19 @@ def set_task_recur(date_str: str, section: str, section_idx: int, recur: str) ->
         if not task:
             return {"error": "Task not found"}
         recur_val = recur.strip() or None
+        old_recur = task["recur"]
+
+        # Remove sibling copies from the current week that were created by the old recur pattern
+        if old_recur and old_recur != recur_val and section != 'Someday':
+            old_siblings = _sections_for_recur(section, old_recur)
+            stale_sections = [s for s in old_siblings if s != section]
+            for s in stale_sections:
+                conn.execute(
+                    "DELETE FROM tasks WHERE week_monday=? AND section=? AND text=? AND recur=?",
+                    (week_monday, s, task["text"], old_recur),
+                )
+                _normalize_positions(conn, week_monday, s)
+
         conn.execute("UPDATE tasks SET recur=? WHERE id=?", (recur_val, task["id"]))
 
         # Expand to other sections of the same week immediately
@@ -665,5 +736,87 @@ def reorder_section(date_str: str, section: str, ordered_texts: list) -> dict:
                              (i, text_to_id[text]))
         _normalize_positions(conn, week_monday, section)
     return {"status": "saved"}
+
+
+# ── Birthdays ─────────────────────────────────────────────────────────────────
+
+def _seed_birthdays(conn):
+    now = datetime.utcnow().isoformat()
+    seed = [
+        ("Harrison",      1, 22, 2023),
+        ("Matt Robertson",1, 26, 1992),
+        ("Tank",          1, 12, 2023),
+        ("Dani",          1,  8, 2016),
+        ("Dad",           2,  5, 1958),
+        ("Sean",          3, 16, 1987),
+        ("Jeff",          3, 12, 1987),
+        ("Drew",          3, 20, 1998),
+        ("Eve",           3,  5, 1959),
+        ("Shelly",        4,  1, 1995),
+        ("Hunter",        4,  9, 1990),
+        ("Seth",          4, 22, 1987),
+        ("Justin",        4, 23, 1987),
+        ("Grandma",       4,  3, 1936),
+        ("Kelsie",        4, 30, 1995),
+        ("Austin",        5, 12, 1990),
+        ("Nate",          7, 20, 1992),
+        ("Olivia",        8, 15, 1929),
+        ("Noah",          8, 17, 1987),
+        ("Chris B",       9, 11, None),
+        ("Vyasar",        9, 14, 1990),
+        ("Will",         11, 20, 1992),
+        ("Charlie",      12, 13, 1999),
+        ("Mason",        12, 21, 2013),
+        ("Matt Mackie",  12, 27, 1994),
+    ]
+    for name, month, day, year in seed:
+        conn.execute(
+            """INSERT INTO birthdays
+               (id, name, birth_month, birth_day, birth_year, created_at)
+               VALUES (?,?,?,?,?,?)""",
+            (str(uuid.uuid4()), name, month, day, year, now),
+        )
+
+
+def list_birthdays() -> list:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM birthdays ORDER BY birth_month, birth_day, name"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_birthday(name: str, birth_month: int, birth_day: int,
+                 birth_year: int = None, reminder_days: int = None) -> dict:
+    name = name.strip()
+    if not name:
+        return {"error": "Name required"}
+    if not (1 <= birth_month <= 12 and 1 <= birth_day <= 31):
+        return {"error": "Invalid date"}
+    now = datetime.utcnow().isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO birthdays
+               (id, name, birth_month, birth_day, birth_year, reminder_days, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (str(uuid.uuid4()), name, birth_month, birth_day, birth_year, reminder_days, now),
+        )
+    return {"status": "saved"}
+
+
+def delete_birthday(birthday_id: str) -> dict:
+    with get_db() as conn:
+        conn.execute("DELETE FROM birthdays WHERE id=?", (birthday_id,))
+    return {"status": "deleted"}
+
+
+def bulk_set_birthday_reminder(ids: list, reminder_days) -> dict:
+    with get_db() as conn:
+        for bid in ids:
+            conn.execute(
+                "UPDATE birthdays SET reminder_days=? WHERE id=?",
+                (reminder_days, bid),
+            )
+    return {"status": "saved", "count": len(ids)}
 
 

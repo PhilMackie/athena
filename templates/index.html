@@ -9,14 +9,16 @@
 {% endblock %}
 
 {% block content %}
+<div id="screen-glitch-overlay"></div>
 <div class="page-header">
     <div class="page-header-right">
         <button class="logout-btn" id="toggle-done-btn" title="Hide/show done">&#10003;</button>
+        <button class="logout-btn" id="birthday-btn" title="Birthdays" onclick="openBirthdayModal()">&#127874;</button>
         <a href="#" class="logout-btn" onclick="navigateToQuanta();return false;">Quanta</a>
         <a href="/logout" class="logout-btn">Logout</a>
     </div>
     <h1 style="display:flex;align-items:center;gap:10px">
-        <img src="/static/icons/athena.svg" style="width:28px;height:28px;display:block">
+        <img id="owl-logo" src="/static/icons/athena.svg" style="width:28px;height:28px" onclick="goToToday()" title="Go to today">
         Athena
     </h1>
     <span class="week-num-label" style="display:block;margin-top:3px">{{ build_time }}</span>
@@ -156,6 +158,52 @@
         </div>
     </div>
 </div>
+
+<!-- Birthday modal -->
+<div id="birthday-modal">
+    <div class="bday-modal-header">
+        <h2>&#127874; Birthdays</h2>
+        <button class="bday-modal-close" onclick="closeBirthdayModal()">&#10005;</button>
+    </div>
+    <div class="bday-add-form">
+        <input name="bday-name"  type="text"   placeholder="Name" autocomplete="off">
+        <input name="bday-month" type="number"  placeholder="MM" min="1" max="12">
+        <input name="bday-day"   type="number"  placeholder="DD" min="1" max="31">
+        <input name="bday-year"  type="number"  placeholder="YYYY" min="1900" max="2099">
+        <button class="bday-add-btn" onclick="submitAddBirthday()">+ Add</button>
+    </div>
+    <div class="bday-bulk-bar" id="bday-bulk-bar">
+        <span class="bday-bulk-count" id="bday-bulk-count">0 selected</span>
+        <select class="bday-bulk-select" id="bday-bulk-reminder-sel">
+            <option value="">— set reminder —</option>
+            <option value="none">No reminder</option>
+            <option value="0">Day of</option>
+            <option value="1">1 day before</option>
+            <option value="3">3 days before</option>
+            <option value="7">7 days before</option>
+            <option value="14">14 days before</option>
+            <option value="30">30 days before</option>
+        </select>
+        <button class="bday-bulk-apply" onclick="bulkApplyReminder()">Apply</button>
+        <button class="bday-bulk-clear" onclick="clearBdaySelection()">&#10005; Clear</button>
+    </div>
+    <div class="bday-table-wrap">
+        <table class="bday-table">
+            <thead>
+                <tr>
+                    <th style="width:24px"><input type="checkbox" id="bday-check-all" class="bday-row-check"></th>
+                    <th>Name</th>
+                    <th>Birthday</th>
+                    <th class="bday-age-cell">Age</th>
+                    <th class="bday-next-cell">Next</th>
+                    <th>Reminder</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="bday-tbody"></tbody>
+        </table>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -170,6 +218,31 @@ async function navigateToQuanta() {
     } catch {
         window.location.href = base;
     }
+}
+
+async function goToToday() {
+    // Glitch FX
+    const owl = document.getElementById('owl-logo');
+    const overlay = document.getElementById('screen-glitch-overlay');
+    owl.classList.add('glitch-active');
+    overlay.classList.add('glitch-active');
+    owl.addEventListener('animationend', () => owl.classList.remove('glitch-active'), { once: true });
+    overlay.addEventListener('animationend', () => overlay.classList.remove('glitch-active'), { once: true });
+
+    // Close card panel if open
+    if (activeCard) await closeCardPanel();
+
+    // Navigate to today's week
+    await loadWeek(todayStr());
+
+    // Collapse all day columns except today, and collapse Someday
+    const todayCol = document.querySelector('.day-col.today');
+    const todayName = todayCol ? todayCol.dataset.day : null;
+    const allDays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+    setCollapsedDays(todayName ? allDays.filter(d => d !== todayName) : []);
+    applyCollapsedStates();
+    localStorage.setItem(SOMEDAY_COLLAPSED_KEY, '1');
+    document.getElementById('wp-someday').classList.add('collapsed');
 }
 
 let currentWeekMonday = null;
@@ -1177,5 +1250,170 @@ document.getElementById('next-week').addEventListener('click', () => {
 
 applyHideDone();
 loadWeek(todayStr());
+
+// ── Birthdays ─────────────────────────────────────────────────────────────────
+
+const BDAY_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+let bdaySelected = new Set();
+
+function openBirthdayModal() {
+    document.getElementById('birthday-modal').classList.add('open');
+    loadBirthdays();
+}
+function closeBirthdayModal() {
+    document.getElementById('birthday-modal').classList.remove('open');
+    bdaySelected.clear();
+}
+
+function bdayFmtDate(month, day, year) {
+    return `${BDAY_MONTHS[month-1]} ${day}${year ? ', ' + year : ''}`;
+}
+function bdayCalcAge(year, month, day) {
+    if (!year) return '—';
+    const today = new Date();
+    let age = today.getFullYear() - year;
+    if (today.getMonth() + 1 < month ||
+        (today.getMonth() + 1 === month && today.getDate() < day)) age--;
+    return age;
+}
+function bdayNextIn(month, day) {
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const yr = today.getFullYear();
+    let bday = new Date(yr, month - 1, day);
+    if (bday < today) bday = new Date(yr + 1, month - 1, day);
+    const diff = Math.round((bday - today) / 86400000);
+    if (diff === 0) return '🎂 today!';
+    if (diff === 1) return 'tomorrow';
+    if (diff <= 7) return `in ${diff} days`;
+    return `${BDAY_MONTHS[bday.getMonth()]} ${bday.getDate()}`;
+}
+function bdayFmtReminder(days) {
+    if (days === null || days === undefined) return { text: '—', set: false };
+    if (days === 0) return { text: 'day of', set: true };
+    if (days === 1) return { text: '1 day before', set: true };
+    return { text: `${days} days before`, set: true };
+}
+
+function updateBdayBulkBar() {
+    const bar = document.getElementById('bday-bulk-bar');
+    const n = bdaySelected.size;
+    document.getElementById('bday-bulk-count').textContent = `${n} selected`;
+    bar.classList.toggle('visible', n > 0);
+    const allChecks = document.querySelectorAll('.bday-item-check');
+    const allChecked = allChecks.length > 0 && Array.from(allChecks).every(c => c.checked);
+    const hdr = document.getElementById('bday-check-all');
+    hdr.checked = allChecked;
+    hdr.indeterminate = n > 0 && !allChecked;
+}
+
+async function loadBirthdays() {
+    const res = await fetchApi('/api/birthdays');
+    if (!res) return;
+    const list = await res.json();
+    const tbody = document.getElementById('bday-tbody');
+    bdaySelected.clear();
+    updateBdayBulkBar();
+    if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="bday-empty">No birthdays yet.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = list.map(b => {
+        const rem = bdayFmtReminder(b.reminder_days);
+        const next = bdayNextIn(b.birth_month, b.birth_day);
+        const age = bdayCalcAge(b.birth_year, b.birth_month, b.birth_day);
+        return `<tr data-id="${esc(b.id)}">
+            <td><input type="checkbox" class="bday-row-check bday-item-check" data-id="${esc(b.id)}"></td>
+            <td class="bday-name-cell">${esc(b.name)}</td>
+            <td class="bday-date-cell">${bdayFmtDate(b.birth_month, b.birth_day, b.birth_year)}</td>
+            <td class="bday-age-cell">${age}</td>
+            <td class="bday-next-cell">${next}</td>
+            <td><span class="bday-reminder-badge${rem.set ? ' set' : ''}">${rem.text}</span></td>
+            <td><button class="bday-del-btn" data-id="${esc(b.id)}" title="Delete">&#215;</button></td>
+        </tr>`;
+    }).join('');
+
+    tbody.querySelectorAll('.bday-item-check').forEach(cb => {
+        cb.addEventListener('change', e => {
+            e.stopPropagation();
+            if (e.target.checked) bdaySelected.add(e.target.dataset.id);
+            else bdaySelected.delete(e.target.dataset.id);
+            e.target.closest('tr').classList.toggle('selected', e.target.checked);
+            updateBdayBulkBar();
+        });
+    });
+    tbody.querySelectorAll('.bday-del-btn').forEach(btn => {
+        btn.addEventListener('click', () => deleteBirthday(btn.dataset.id));
+    });
+}
+
+document.getElementById('bday-check-all').addEventListener('change', e => {
+    document.querySelectorAll('.bday-item-check').forEach(cb => {
+        cb.checked = e.target.checked;
+        cb.closest('tr').classList.toggle('selected', e.target.checked);
+        if (e.target.checked) bdaySelected.add(cb.dataset.id);
+        else bdaySelected.delete(cb.dataset.id);
+    });
+    updateBdayBulkBar();
+});
+
+async function submitAddBirthday() {
+    const form = document.querySelector('.bday-add-form');
+    const name  = form.querySelector('[name="bday-name"]').value.trim();
+    const month = parseInt(form.querySelector('[name="bday-month"]').value);
+    const day   = parseInt(form.querySelector('[name="bday-day"]').value);
+    const yearV = form.querySelector('[name="bday-year"]').value.trim();
+    const year  = yearV ? parseInt(yearV) : null;
+    if (!name || !month || !day) return;
+    const res = await fetchApi('/api/birthdays', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ name, month, day, year }),
+    });
+    if (!res || !res.ok) return;
+    form.querySelector('[name="bday-name"]').value = '';
+    form.querySelector('[name="bday-month"]').value = '';
+    form.querySelector('[name="bday-day"]').value = '';
+    form.querySelector('[name="bday-year"]').value = '';
+    loadBirthdays();
+}
+
+async function deleteBirthday(id) {
+    if (!confirm('Delete this birthday?')) return;
+    await fetchApi(`/api/birthdays/${id}`, { method: 'DELETE' });
+    bdaySelected.delete(id);
+    loadBirthdays();
+}
+
+function clearBdaySelection() {
+    bdaySelected.clear();
+    document.querySelectorAll('.bday-item-check').forEach(cb => {
+        cb.checked = false;
+        cb.closest('tr').classList.remove('selected');
+    });
+    document.getElementById('bday-check-all').checked = false;
+    document.getElementById('bday-check-all').indeterminate = false;
+    document.getElementById('bday-bulk-reminder-sel').value = '';
+    updateBdayBulkBar();
+}
+
+async function bulkApplyReminder() {
+    if (!bdaySelected.size) return;
+    const sel = document.getElementById('bday-bulk-reminder-sel').value;
+    if (!sel) return;
+    const reminder_days = sel === 'none' ? null : parseInt(sel);
+    await fetchApi('/api/birthdays/bulk-reminder', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ids: Array.from(bdaySelected), reminder_days }),
+    });
+    clearBdaySelection();
+    loadBirthdays();
+}
+
+// Enter key in add form
+document.querySelector('.bday-add-form').addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitAddBirthday();
+});
 </script>
 {% endblock %}

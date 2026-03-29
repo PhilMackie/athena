@@ -14,6 +14,7 @@ from daemons.weekplan import (
     set_task_recur, defer_task, duplicate_task, attach_file, reorder_section,
     set_task_note, rename_task, set_task_binding, toggle_step, set_step_count,
     set_task_color,
+    list_birthdays, add_birthday, delete_birthday, bulk_set_birthday_reminder,
 )
 
 logging.basicConfig(
@@ -455,6 +456,49 @@ def api_proxy_dwm():
     except Exception as e:
         logger.warning(f"DWM proxy failed: {e}")
         return jsonify({"periods": {}}), 503
+
+
+# ── Birthdays ─────────────────────────────────────────────────────────────────
+
+@app.route("/api/birthdays", methods=["GET"])
+@login_required
+def api_birthdays_list():
+    return jsonify(list_birthdays())
+
+
+@app.route("/api/birthdays", methods=["POST"])
+@login_required
+def api_birthday_add():
+    data = request.get_json() or {}
+    name = data.get("name", "")
+    month = data.get("month")
+    day = data.get("day")
+    year = data.get("year") or None
+    if not name or month is None or day is None:
+        return jsonify({"error": "name, month, day required"}), 400
+    result = add_birthday(name, int(month), int(day),
+                          int(year) if year else None)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/birthdays/<birthday_id>", methods=["DELETE"])
+@login_required
+def api_birthday_delete(birthday_id):
+    return jsonify(delete_birthday(birthday_id))
+
+
+@app.route("/api/birthdays/bulk-reminder", methods=["POST"])
+@login_required
+def api_birthday_bulk_reminder():
+    data = request.get_json() or {}
+    ids = data.get("ids", [])
+    reminder_days = data.get("reminder_days")  # None clears reminder
+    if not ids:
+        return jsonify({"error": "ids required"}), 400
+    result = bulk_set_birthday_reminder(ids, reminder_days)
+    return jsonify(result)
 
 
 if __name__ == "__main__":

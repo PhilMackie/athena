@@ -568,6 +568,39 @@ input[type="text"]:focus {
     animation: none;
 }
 
+/* Scratchpad section */
+.wp-scratchpad {
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+}
+
+.wp-scratchpad-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.5625rem;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    color: var(--text-secondary);
+    padding: 5px 8px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.wp-scratchpad.collapsed .wp-scratchpad-tasks,
+.wp-scratchpad.collapsed .wp-scratchpad-add { display: none; }
+.wp-scratchpad.collapsed { border-bottom: none; }
+.wp-scratchpad.collapsed .wp-scratchpad-header { border-bottom: none; }
+.wp-scratchpad-header .wp-day-eye { opacity: 0.4; }
+.wp-scratchpad-header:hover .wp-day-eye { opacity: 0.7; }
+.wp-scratchpad.collapsed .wp-scratchpad-header .wp-day-eye { opacity: 0.6; }
+
+.wp-scratchpad-tasks { padding: 3px 2px; min-height: 36px; }
+.wp-scratchpad-add { padding: 3px 4px; border-top: 1px solid #111; }
+
 /* Someday section */
 .wp-someday {
     margin-top: 8px;
@@ -1124,6 +1157,25 @@ input[type="text"]:focus {
 }
 .bday-bulk-bar.visible { display: flex; }
 .bday-bulk-count { color: #b967ff; font-weight: 700; }
+.bday-offset-check {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: #ccc;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.bday-offset-check input[type="checkbox"] { accent-color: #b967ff; cursor: pointer; }
+.bday-offset-check input[type="number"] {
+    background: #111;
+    border: 1px solid #333;
+    color: #e0e0e0;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 2px 4px;
+    text-align: center;
+}
+.bday-offset-custom { gap: 4px; }
 .bday-bulk-select {
     background: #111;
     border: 1px solid #333;

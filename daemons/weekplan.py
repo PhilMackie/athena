@@ -4,6 +4,7 @@ Source of truth: data/athena.db
 Recurring tasks: vault/Projects/Quanta/Templates/WeeklyRecurring.md
 """
 
+import calendar as _calendar
 import json
 import re
 import sqlite3
@@ -16,7 +17,7 @@ DB_PATH = config.DATA_DIR / "athena.db"
 RECURRING_FILE = config.TEMPLATES_DIR / "WeeklyRecurring.md"
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-SECTIONS = DAY_NAMES + ["Someday"]
+SECTIONS = DAY_NAMES + ["Scratchpad", "Someday"]
 SOMEDAY_WEEK = '1900-01-01'  # sentinel: Someday tasks are global, not week-specific
 MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -88,10 +89,23 @@ def init_db():
                 conn.execute(f'ALTER TABLE tasks ADD COLUMN {col}')
             except Exception:
                 pass
+        try:
+            conn.execute('ALTER TABLE birthdays ADD COLUMN reminder_offsets TEXT')
+        except Exception:
+            pass
+        # migrate old single reminder_days value into new reminder_offsets column
+        conn.execute("""
+            UPDATE birthdays SET reminder_offsets = CAST(reminder_days AS TEXT)
+            WHERE reminder_offsets IS NULL AND reminder_days IS NOT NULL
+        """)
         # Seed birthday data (one-time)
         if not conn.execute("SELECT 1 FROM migrations WHERE name='seed_birthdays'").fetchone():
             _seed_birthdays(conn)
             conn.execute("INSERT INTO migrations VALUES ('seed_birthdays')")
+        # One-time: set all existing birthdays to standard 0,7 reminders
+        if not conn.execute("SELECT 1 FROM migrations WHERE name='bday_reminders_0_7'").fetchone():
+            conn.execute("UPDATE birthdays SET reminder_offsets='0,7'")
+            conn.execute("INSERT INTO migrations VALUES ('bday_reminders_0_7')")
         # Migrate any Someday tasks that are scattered across week_monday values
         conn.execute(
             "UPDATE tasks SET week_monday=? WHERE section='Someday' AND week_monday!=?",
@@ -190,10 +204,34 @@ def _sections_for_recur(original_section: str, recur: str) -> list:
     return [original_section]
 
 
+def _add_months(d: date, months: int) -> date:
+    """Add N calendar months, clamping day to end-of-month if needed."""
+    total = d.month - 1 + months
+    year = d.year + total // 12
+    month = total % 12 + 1
+    day = min(d.day, _calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _month_interval(recur: str):
+    """Return number of calendar months for month/year recurrence patterns, else None."""
+    r = recur.lower().strip()
+    if r == 'monthly':
+        return 1
+    if r == 'annually':
+        return 12
+    m = re.match(r'^every (\d+) (months?|years?)$', r)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2).rstrip('s')
+        return n * (12 if unit == 'year' else 1)
+    return None
+
+
 def _interval_days(recur: str) -> int | None:
-    """Days between occurrences for interval-based recurrence.
+    """Days between occurrences for day/week interval-based recurrence.
     Returns None for section-based patterns (daily, weekdays, every Mon, etc.)
-    that should be carried every week regardless."""
+    or month/year patterns (handled separately by _month_interval)."""
     if not recur:
         return None
     r = recur.lower().strip()
@@ -201,21 +239,43 @@ def _interval_days(recur: str) -> int | None:
         return 7
     if r == 'biweekly':
         return 14
-    if r == 'monthly':
-        return 30
-    if r == 'annually':
-        return 365
-    m = re.match(r'^every (\d+) (days?|weeks?|months?|years?)$', r)
+    m = re.match(r'^every (\d+) (days?|weeks?)$', r)
     if m:
         n = int(m.group(1))
         unit = m.group(2).rstrip('s')
-        return n * {'day': 1, 'week': 7, 'month': 30, 'year': 365}[unit]
-    return None  # section-based — carry every week
+        return n * {'day': 1, 'week': 7}[unit]
+    return None  # section-based or month/year — handled elsewhere
 
 
 def _should_carry(conn, text: str, section: str, recur: str, target_monday: str) -> bool:
-    """For interval-based recurrence, check if target_monday falls on a cycle.
-    Uses the earliest known occurrence as the reference point."""
+    """Check if target_monday's week should receive a carry of this recurring task."""
+    # Calendar month/year patterns — use real month arithmetic
+    n_months = _month_interval(recur)
+    if n_months is not None:
+        row = conn.execute(
+            """SELECT created_at FROM tasks WHERE text=? AND section=? AND recur=?
+               ORDER BY week_monday ASC LIMIT 1""",
+            (text, section, recur),
+        ).fetchone()
+        if not row or not row[0]:
+            return True
+        # Use the actual creation date of the earliest instance
+        origin = date.fromisoformat(row[0][:10])
+        target = date.fromisoformat(target_monday)
+        target_sunday = target + timedelta(days=6)
+        if target_sunday < origin:
+            return False
+        # Check if any Nth-month anniversary of origin falls within the target week
+        m = 0
+        while True:
+            candidate = _add_months(origin, m)
+            if candidate > target_sunday:
+                break
+            if candidate >= target:
+                return True
+            m += n_months
+        return False
+
     interval = _interval_days(recur)
     if interval is None or interval <= 7:
         return True  # section-based or weekly — always carry
@@ -266,6 +326,10 @@ def get_or_create_week(date_str: str) -> dict:
             inserted = set()
 
             for t in carry:
+                if t["checked"]:
+                    continue
+                if t["section"] == 'Scratchpad':
+                    continue
                 if not _should_carry(conn, t["text"], t["section"], t["recur"], week_monday):
                     continue
                 for target_section in _sections_for_recur(t["section"], t["recur"]):
@@ -297,39 +361,42 @@ def get_or_create_week(date_str: str) -> dict:
 
         # Birthday reminders — runs every load so newly-set reminders appear immediately
         now_bday = datetime.utcnow().isoformat()
-        bdays = conn.execute(
-            "SELECT * FROM birthdays WHERE reminder_days IS NOT NULL"
-        ).fetchall()
+        bdays = conn.execute("SELECT * FROM birthdays").fetchall()
         for bday in bdays:
-            for yr_offset in (0, 1):
-                try:
-                    bday_date = date(monday.year + yr_offset,
-                                     bday['birth_month'], bday['birth_day'])
-                except ValueError:
-                    continue
-                reminder_date = bday_date - timedelta(days=bday['reminder_days'])
-                if monday <= reminder_date <= sunday:
-                    day_name = DAY_NAMES[reminder_date.weekday()]
-                    n = bday['reminder_days']
-                    if n == 0:
-                        text = f"🎂 {bday['name']}'s birthday today!"
-                    elif n == 1:
-                        text = f"🎂 {bday['name']}'s birthday tomorrow"
-                    else:
-                        text = f"🎂 {bday['name']}'s birthday in {n} days"
-                    already = conn.execute(
-                        "SELECT 1 FROM tasks WHERE week_monday=? AND section=? AND text=?",
-                        (week_monday, day_name, text),
-                    ).fetchone()
-                    if not already:
-                        conn.execute(
-                            """INSERT INTO tasks
-                               (id, week_monday, section, position, text, checked, created_at)
-                               VALUES (?,?,?,999,?,0,?)""",
-                            (str(uuid.uuid4()), week_monday, day_name, text, now_bday),
-                        )
-                        _normalize_positions(conn, week_monday, day_name)
-                    break
+            offsets_raw = bday['reminder_offsets']
+            if not offsets_raw:
+                continue
+            offsets = [int(x.strip()) for x in offsets_raw.split(',')
+                       if x.strip().lstrip('-').isdigit()]
+            for offset in offsets:
+                for yr_offset in (0, 1):
+                    try:
+                        bday_date = date(monday.year + yr_offset,
+                                         bday['birth_month'], bday['birth_day'])
+                    except ValueError:
+                        continue
+                    reminder_date = bday_date - timedelta(days=offset)
+                    if monday <= reminder_date <= sunday:
+                        day_name = DAY_NAMES[reminder_date.weekday()]
+                        if offset == 0:
+                            text = f"🎂 {bday['name']}'s birthday today!"
+                        elif offset == 1:
+                            text = f"🎂 {bday['name']}'s birthday tomorrow"
+                        else:
+                            text = f"🎂 {bday['name']}'s birthday in {offset} days"
+                        already = conn.execute(
+                            "SELECT 1 FROM tasks WHERE week_monday=? AND section=? AND text=?",
+                            (week_monday, day_name, text),
+                        ).fetchone()
+                        if not already:
+                            conn.execute(
+                                """INSERT INTO tasks
+                                   (id, week_monday, section, position, text, checked, created_at)
+                                   VALUES (?,?,?,999,?,0,?)""",
+                                (str(uuid.uuid4()), week_monday, day_name, text, now_bday),
+                            )
+                            _normalize_positions(conn, week_monday, day_name)
+                        break
 
         rows = conn.execute(
             "SELECT * FROM tasks WHERE week_monday=? AND section!='Someday' ORDER BY section, position",
@@ -338,6 +405,11 @@ def get_or_create_week(date_str: str) -> dict:
 
         someday_rows = conn.execute(
             "SELECT * FROM tasks WHERE section='Someday' ORDER BY position",
+        ).fetchall()
+
+        scratchpad_rows = conn.execute(
+            "SELECT * FROM tasks WHERE week_monday=? AND section='Scratchpad' ORDER BY position",
+            (week_monday,),
         ).fetchall()
 
     by_section = {s: [] for s in DAY_NAMES}
@@ -350,6 +422,7 @@ def get_or_create_week(date_str: str) -> dict:
         for s in DAY_NAMES
     }
     someday_indexed = [_row_to_task(r, i) for i, r in enumerate(someday_rows)]
+    scratchpad_indexed = [_row_to_task(r, i) for i, r in enumerate(scratchpad_rows)]
 
     today = date.today()
     week_num = monday.isocalendar()[1]
@@ -379,9 +452,10 @@ def get_or_create_week(date_str: str) -> dict:
             f"{MONTH_ABBR[monday.month-1]} {monday.day}–"
             f"{MONTH_ABBR[sunday.month-1]} {sunday.day}"
         ),
-        "days":      days,
-        "someday":   someday_indexed,
-        "recurring": load_recurring(),
+        "days":        days,
+        "someday":     someday_indexed,
+        "scratchpad":  scratchpad_indexed,
+        "recurring":   load_recurring(),
     }
 
 
@@ -787,7 +861,7 @@ def list_birthdays() -> list:
 
 
 def add_birthday(name: str, birth_month: int, birth_day: int,
-                 birth_year: int = None, reminder_days: int = None) -> dict:
+                 birth_year: int = None, reminder_offsets: str = "0,7") -> dict:
     name = name.strip()
     if not name:
         return {"error": "Name required"}
@@ -797,9 +871,9 @@ def add_birthday(name: str, birth_month: int, birth_day: int,
     with get_db() as conn:
         conn.execute(
             """INSERT INTO birthdays
-               (id, name, birth_month, birth_day, birth_year, reminder_days, created_at)
+               (id, name, birth_month, birth_day, birth_year, reminder_offsets, created_at)
                VALUES (?,?,?,?,?,?,?)""",
-            (str(uuid.uuid4()), name, birth_month, birth_day, birth_year, reminder_days, now),
+            (str(uuid.uuid4()), name, birth_month, birth_day, birth_year, reminder_offsets, now),
         )
     return {"status": "saved"}
 
@@ -810,12 +884,12 @@ def delete_birthday(birthday_id: str) -> dict:
     return {"status": "deleted"}
 
 
-def bulk_set_birthday_reminder(ids: list, reminder_days) -> dict:
+def bulk_set_birthday_reminders(ids: list, reminder_offsets) -> dict:
     with get_db() as conn:
         for bid in ids:
             conn.execute(
-                "UPDATE birthdays SET reminder_days=? WHERE id=?",
-                (reminder_days, bid),
+                "UPDATE birthdays SET reminder_offsets=? WHERE id=?",
+                (reminder_offsets, bid),
             )
     return {"status": "saved", "count": len(ids)}
 

@@ -37,6 +37,19 @@
 <!-- 7-column day grid -->
 <div class="week-grid" id="week-grid"></div>
 
+<!-- Scratchpad section -->
+<div class="wp-scratchpad" id="wp-scratchpad">
+    <div class="wp-scratchpad-header">
+        Scratchpad
+        <button class="wp-day-eye" id="wp-scratchpad-eye" title="Hide/show">&#9900;</button>
+    </div>
+    <div class="wp-scratchpad-tasks" id="scratchpad-tasks"></div>
+    <div class="wp-scratchpad-add">
+        <input type="text" class="wp-add-input" id="scratchpad-add-input"
+               placeholder="+" autocomplete="off">
+    </div>
+</div>
+
 <!-- Someday section -->
 <div class="wp-someday" id="wp-someday">
     <div class="wp-someday-header">
@@ -174,16 +187,13 @@
     </div>
     <div class="bday-bulk-bar" id="bday-bulk-bar">
         <span class="bday-bulk-count" id="bday-bulk-count">0 selected</span>
-        <select class="bday-bulk-select" id="bday-bulk-reminder-sel">
-            <option value="">— set reminder —</option>
-            <option value="none">No reminder</option>
-            <option value="0">Day of</option>
-            <option value="1">1 day before</option>
-            <option value="3">3 days before</option>
-            <option value="7">7 days before</option>
-            <option value="14">14 days before</option>
-            <option value="30">30 days before</option>
-        </select>
+        <label class="bday-offset-check"><input type="checkbox" id="bday-offset-0"> Day of</label>
+        <label class="bday-offset-check"><input type="checkbox" id="bday-offset-7"> 7 days before</label>
+        <label class="bday-offset-check bday-offset-custom">
+            <input type="checkbox" id="bday-offset-custom-chk">
+            <input type="number" id="bday-offset-custom-val" placeholder="N" min="1" max="365" style="width:48px">
+            days before
+        </label>
         <button class="bday-bulk-apply" onclick="bulkApplyReminder()">Apply</button>
         <button class="bday-bulk-clear" onclick="clearBdaySelection()">&#10005; Clear</button>
     </div>
@@ -250,9 +260,11 @@ let activeCard = null;
 let cardNoteOriginal = '';
 let cardTitleOriginal = '';
 let somedaySortable = null;
+let scratchpadSortable = null;
 
 const COLLAPSED_KEY = 'athena-collapsed-days';
 const SOMEDAY_COLLAPSED_KEY = 'athena-someday-collapsed';
+const SCRATCHPAD_COLLAPSED_KEY = 'athena-scratchpad-collapsed';
 
 function getCollapsedDays() {
     try { return JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]'); } catch { return []; }
@@ -294,6 +306,18 @@ document.getElementById('wp-someday-eye').addEventListener('click', () => {
     el.classList.toggle('collapsed', nowCollapsed);
 });
 applySomedayCollapsed();
+
+function applyScratchpadCollapsed() {
+    const collapsed = localStorage.getItem(SCRATCHPAD_COLLAPSED_KEY) === '1';
+    document.getElementById('wp-scratchpad').classList.toggle('collapsed', collapsed);
+}
+document.getElementById('wp-scratchpad-eye').addEventListener('click', () => {
+    const el = document.getElementById('wp-scratchpad');
+    const nowCollapsed = !el.classList.contains('collapsed');
+    localStorage.setItem(SCRATCHPAD_COLLAPSED_KEY, nowCollapsed ? '1' : '0');
+    el.classList.toggle('collapsed', nowCollapsed);
+});
+applyScratchpadCollapsed();
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
@@ -409,6 +433,20 @@ function renderWeek(data) {
         grid.appendChild(col);
     });
 
+    const scratchpadEl = document.getElementById('scratchpad-tasks');
+    scratchpadEl.innerHTML = '';
+    (data.scratchpad || []).forEach(task => {
+        scratchpadEl.appendChild(makeTaskEl(task, data.monday, 'Scratchpad', prefixColorMap));
+    });
+
+    const scratchpadAdd = document.getElementById('scratchpad-add-input');
+    const newScratchpadAdd = scratchpadAdd.cloneNode(true);
+    scratchpadAdd.replaceWith(newScratchpadAdd);
+    newScratchpadAdd.dataset.date = data.monday;
+    newScratchpadAdd.addEventListener('keyup', e => {
+        if (e.key === 'Enter') handleAddTaskDirect(newScratchpadAdd, 'Scratchpad', data.monday, false);
+    });
+
     const somedayEl = document.getElementById('someday-tasks');
     somedayEl.innerHTML = '';
     data.someday.forEach(task => {
@@ -451,6 +489,10 @@ function renderWeek(data) {
         if (!matchTask && savedCard.section === 'Someday') {
             const t = data.someday.find(t => t.section_idx === savedCard.section_idx);
             if (t) matchTask = { ...t, date_str: data.monday, section: 'Someday' };
+        }
+        if (!matchTask && savedCard.section === 'Scratchpad') {
+            const t = (data.scratchpad || []).find(t => t.section_idx === savedCard.section_idx);
+            if (t) matchTask = { ...t, date_str: data.monday, section: 'Scratchpad' };
         }
         if (matchTask) openCardPanel(matchTask);
     }
@@ -536,6 +578,10 @@ function makeTaskEl(task, dateStr, section, prefixColorMap = {}) {
 function initSortables(mondayStr) {
     if (typeof Sortable === 'undefined') return;
 
+    const scratchpadTasksEl = document.getElementById('scratchpad-tasks');
+    scratchpadTasksEl.dataset.date = mondayStr;
+    scratchpadTasksEl.dataset.section = 'Scratchpad';
+
     const somedayEl = document.getElementById('someday-tasks');
     somedayEl.dataset.date = mondayStr;
     somedayEl.dataset.section = 'Someday';
@@ -601,6 +647,11 @@ function initSortables(mondayStr) {
         if (!isTouch) opts.handle = '.wp-drag-handle';
         Sortable.create(list, opts);
     });
+
+    if (scratchpadSortable) { scratchpadSortable.destroy(); scratchpadSortable = null; }
+    const scratchpadOpts = { ...baseOpts };
+    if (!isTouch) scratchpadOpts.handle = '.wp-drag-handle';
+    scratchpadSortable = Sortable.create(scratchpadTasksEl, scratchpadOpts);
 
     if (somedaySortable) { somedaySortable.destroy(); somedaySortable = null; }
     const somedayOpts = { ...baseOpts };
@@ -786,7 +837,7 @@ function openCardPanel(task) {
         section: task.section,
         section_idx: task.section_idx,
         recur: task.recur || null,
-        is_someday: task.is_someday || task.section === 'Someday',
+        is_someday: task.is_someday || task.section === 'Someday' || task.section === 'Scratchpad',
         nra_binding: task.nra_binding || null,
         dwm_binding: task.dwm_binding || null,
         steps: task.steps ? JSON.parse(JSON.stringify(task.steps)) : [],
@@ -879,6 +930,22 @@ async function saveCardNote() {
             note: newNote,
         }),
     });
+    // Keep the DOM element in sync so reopening the card shows the correct note
+    const taskEl = document.querySelector(
+        `.wp-task-item[data-section="${activeCard.section}"][data-section-idx="${activeCard.section_idx}"]`
+    );
+    if (taskEl) {
+        taskEl.dataset.note = newNote;
+        const textEl = taskEl.querySelector('.wp-task-text');
+        if (textEl) {
+            const dot = textEl.querySelector('.wp-note-dot');
+            if (newNote && !dot) {
+                textEl.insertAdjacentHTML('beforeend', '<span class="wp-note-dot">&#183;</span>');
+            } else if (!newNote && dot) {
+                dot.remove();
+            }
+        }
+    }
 }
 
 document.getElementById('wp-card-notes').addEventListener('input', function () { autoResizeCard(this); });
@@ -1288,11 +1355,17 @@ function bdayNextIn(month, day) {
     if (diff <= 7) return `in ${diff} days`;
     return `${BDAY_MONTHS[bday.getMonth()]} ${bday.getDate()}`;
 }
-function bdayFmtReminder(days) {
-    if (days === null || days === undefined) return { text: '—', set: false };
-    if (days === 0) return { text: 'day of', set: true };
-    if (days === 1) return { text: '1 day before', set: true };
-    return { text: `${days} days before`, set: true };
+function bdayFmtReminder(offsets) {
+    if (!offsets) return { text: '—', set: false };
+    const parts = offsets.split(',').map(s => s.trim()).filter(Boolean).map(Number)
+        .filter(n => !isNaN(n)).sort((a, b) => a - b);
+    if (!parts.length) return { text: '—', set: false };
+    const labels = parts.map(n => {
+        if (n === 0) return 'day of';
+        if (n === 1) return '1 day before';
+        return `${n} days before`;
+    });
+    return { text: labels.join(', '), set: true };
 }
 
 function updateBdayBulkBar() {
@@ -1319,7 +1392,7 @@ async function loadBirthdays() {
         return;
     }
     tbody.innerHTML = list.map(b => {
-        const rem = bdayFmtReminder(b.reminder_days);
+        const rem = bdayFmtReminder(b.reminder_offsets);
         const next = bdayNextIn(b.birth_month, b.birth_day);
         const age = bdayCalcAge(b.birth_year, b.birth_month, b.birth_day);
         return `<tr data-id="${esc(b.id)}">
@@ -1393,19 +1466,27 @@ function clearBdaySelection() {
     });
     document.getElementById('bday-check-all').checked = false;
     document.getElementById('bday-check-all').indeterminate = false;
-    document.getElementById('bday-bulk-reminder-sel').value = '';
+    document.getElementById('bday-offset-0').checked = false;
+    document.getElementById('bday-offset-7').checked = false;
+    document.getElementById('bday-offset-custom-chk').checked = false;
+    document.getElementById('bday-offset-custom-val').value = '';
     updateBdayBulkBar();
 }
 
 async function bulkApplyReminder() {
     if (!bdaySelected.size) return;
-    const sel = document.getElementById('bday-bulk-reminder-sel').value;
-    if (!sel) return;
-    const reminder_days = sel === 'none' ? null : parseInt(sel);
+    const offsets = [];
+    if (document.getElementById('bday-offset-0').checked) offsets.push(0);
+    if (document.getElementById('bday-offset-7').checked) offsets.push(7);
+    if (document.getElementById('bday-offset-custom-chk').checked) {
+        const n = parseInt(document.getElementById('bday-offset-custom-val').value);
+        if (!isNaN(n) && n >= 1) offsets.push(n);
+    }
+    const reminder_offsets = offsets.length ? offsets.join(',') : null;
     await fetchApi('/api/birthdays/bulk-reminder', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ ids: Array.from(bdaySelected), reminder_days }),
+        body: JSON.stringify({ ids: Array.from(bdaySelected), reminder_offsets }),
     });
     clearBdaySelection();
     loadBirthdays();

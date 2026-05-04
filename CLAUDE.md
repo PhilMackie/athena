@@ -4,6 +4,12 @@ Weekly planner — 7-column grid with Someday backlog. Flask service on port 500
 
 **Phil's Notes:** `/home/phil/Documents/philVault/Projects/Athena/`
 
+## Deployment Rules
+**Never deploy to the Pi without Phil explicitly saying so.** Do not run deploy scripts, rsync to `duobrain.local`, SSH to `pi@duobrain.local`, or restart services via `systemctl`. Always describe what you want to deploy and wait for confirmation. A global hook will block these commands regardless.
+
+- DEV: `python3 app.py` → `http://localhost:5002`
+- PROD: Pi at `duobrain.local` — deploy only on explicit instruction
+
 ## Key Resources
 - **Architecture:** `philVault/Projects/Quanta/Personal Hub Architecture – Step-by-Step Plan.md`
 

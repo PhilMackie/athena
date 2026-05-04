@@ -14,7 +14,7 @@ from daemons.weekplan import (
     set_task_recur, defer_task, duplicate_task, attach_file, reorder_section,
     set_task_note, rename_task, set_task_binding, toggle_step, set_step_count,
     set_task_color,
-    list_birthdays, add_birthday, delete_birthday, bulk_set_birthday_reminder,
+    list_birthdays, add_birthday, delete_birthday, bulk_set_birthday_reminders,
 )
 
 logging.basicConfig(
@@ -494,10 +494,10 @@ def api_birthday_delete(birthday_id):
 def api_birthday_bulk_reminder():
     data = request.get_json() or {}
     ids = data.get("ids", [])
-    reminder_days = data.get("reminder_days")  # None clears reminder
+    reminder_offsets = data.get("reminder_offsets")  # None or "" clears reminders
     if not ids:
         return jsonify({"error": "ids required"}), 400
-    result = bulk_set_birthday_reminder(ids, reminder_days)
+    result = bulk_set_birthday_reminders(ids, reminder_offsets or None)
     return jsonify(result)
 
 

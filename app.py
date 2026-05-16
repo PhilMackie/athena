@@ -15,6 +15,7 @@ from daemons.weekplan import (
     set_task_note, rename_task, set_task_binding, toggle_step, set_step_count,
     set_task_color,
     list_birthdays, add_birthday, delete_birthday, bulk_set_birthday_reminders,
+    list_recurring_tasks, add_recurring_task, delete_all_recurring,
 )
 
 logging.basicConfig(
@@ -499,6 +500,42 @@ def api_birthday_bulk_reminder():
         return jsonify({"error": "ids required"}), 400
     result = bulk_set_birthday_reminders(ids, reminder_offsets or None)
     return jsonify(result)
+
+
+# ── Recurring Manager ─────────────────────────────────────────────────────────
+
+@app.route("/api/recurring", methods=["GET"])
+@login_required
+def api_recurring_list():
+    return jsonify(list_recurring_tasks())
+
+
+@app.route("/api/recurring", methods=["POST"])
+@login_required
+def api_recurring_add():
+    data = request.get_json() or {}
+    text = data.get("text", "").strip()
+    section = data.get("section", "")
+    recur = data.get("recur", "").strip()
+    week_monday = data.get("week_monday", "")
+    day_of_month = data.get("day_of_month")
+    if not text or not section or not recur or not week_monday:
+        return jsonify({"error": "text, section, recur, week_monday required"}), 400
+    result = add_recurring_task(text, section, recur, week_monday, day_of_month)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/recurring", methods=["DELETE"])
+@login_required
+def api_recurring_delete():
+    data = request.get_json() or {}
+    text = data.get("text", "")
+    recur = data.get("recur", "")
+    if not text or not recur:
+        return jsonify({"error": "text, recur required"}), 400
+    return jsonify(delete_all_recurring(text, recur))
 
 
 if __name__ == "__main__":

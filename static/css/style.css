@@ -1276,3 +1276,174 @@ input[type="text"]:focus {
     .bday-add-form input[name="bday-year"] { display: none; }
 }
 
+/* ── Recurring Manager ───────────────────────────────────────────────────────── */
+#recurring-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    background: rgba(0,0,0,0.92);
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+}
+#recurring-modal.open { display: flex; }
+
+.rcr-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px 10px;
+    border-bottom: 1px solid #2a2a3a;
+    flex-shrink: 0;
+}
+.rcr-modal-header h2 {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #b967ff;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin: 0;
+}
+.rcr-modal-close {
+    background: transparent;
+    border: 1px solid #333;
+    color: #aaa;
+    font-size: 1.1rem;
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.rcr-modal-close:hover { border-color: #b967ff; color: #b967ff; }
+
+.rcr-add-form {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 10px 18px;
+    border-bottom: 1px solid #1e1e2e;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+.rcr-add-form input, .rcr-add-form select {
+    background: #111;
+    border: 1px solid #333;
+    color: #e0e0e0;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 5px 8px;
+    outline: none;
+    border-radius: 2px;
+}
+.rcr-add-form input:focus, .rcr-add-form select:focus { border-color: #b967ff; }
+#rcr-add-text { flex: 2; min-width: 120px; }
+.rcr-add-btn {
+    background: #b967ff22;
+    border: 1px solid #b967ff;
+    color: #b967ff;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 5px 12px;
+    cursor: pointer;
+    border-radius: 2px;
+    white-space: nowrap;
+}
+.rcr-add-btn:hover { background: #b967ff44; }
+
+.rcr-bulk-bar {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 18px;
+    background: #0e0e1a;
+    border-bottom: 1px solid #2a2a3a;
+    font-size: 0.75rem;
+    flex-shrink: 0;
+}
+.rcr-bulk-bar.visible { display: flex; }
+.rcr-bulk-count { color: #b967ff; font-weight: 700; }
+.rcr-bulk-delete {
+    background: #ff000022;
+    border: 1px solid #ff4444;
+    color: #ff4444;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    cursor: pointer;
+    border-radius: 2px;
+}
+.rcr-bulk-delete:hover { background: #ff000044; }
+.rcr-bulk-clear {
+    background: transparent;
+    border: 1px solid #444;
+    color: #888;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 4px 8px;
+    cursor: pointer;
+    border-radius: 2px;
+    margin-left: auto;
+}
+.rcr-bulk-clear:hover { color: #ccc; border-color: #888; }
+.rcr-row-check { accent-color: #b967ff; cursor: pointer; }
+
+.rcr-table-wrap {
+    overflow-y: auto;
+    flex: 1;
+    padding: 0 18px 18px;
+}
+.rcr-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+}
+.rcr-table th {
+    text-align: left;
+    color: #888;
+    font-weight: 400;
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 8px 6px 6px;
+    border-bottom: 1px solid #222;
+    white-space: nowrap;
+}
+.rcr-table td {
+    padding: 7px 6px;
+    border-bottom: 1px solid #1a1a2a;
+    vertical-align: middle;
+}
+.rcr-table tr:hover td { background: #0d0d1a; }
+.rcr-group-row td {
+    color: #b967ff;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 10px 6px 4px;
+    background: #0a0a14 !important;
+    border-bottom: 1px solid #2a2a3a;
+}
+.rcr-text-cell { color: #e0e0e0; }
+.rcr-section-cell { color: #888; white-space: nowrap; }
+.rcr-recur-cell { color: #b967ff; white-space: nowrap; }
+.rcr-count-cell, .rcr-count-hdr { color: #555; text-align: right; padding-right: 14px; }
+.rcr-del-btn {
+    background: transparent;
+    border: none;
+    color: #444;
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 2px;
+}
+.rcr-del-btn:hover { color: #ff4444; background: #1a0000; }
+.rcr-empty { color: #555; font-size: 0.8rem; text-align: center; padding: 24px; }
+
+@media (max-width: 600px) {
+    .rcr-count-cell, .rcr-count-hdr { display: none; }
+}
+

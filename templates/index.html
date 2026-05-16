@@ -13,6 +13,7 @@
 <div class="page-header">
     <div class="page-header-right">
         <button class="logout-btn" id="toggle-done-btn" title="Hide/show done">&#10003;</button>
+        <button class="logout-btn" id="recurring-btn" title="Recurring" onclick="openRecurringModal()">&#8734;</button>
         <button class="logout-btn" id="birthday-btn" title="Birthdays" onclick="openBirthdayModal()">&#127874;</button>
         <a href="#" class="logout-btn" onclick="navigateToQuanta();return false;">Quanta</a>
         <a href="/logout" class="logout-btn">Logout</a>
@@ -172,6 +173,66 @@
     </div>
 </div>
 
+<!-- Recurring Manager modal -->
+<div id="recurring-modal">
+    <div class="rcr-modal-header">
+        <h2>&#8734; Recurring</h2>
+        <button class="rcr-modal-close" onclick="closeRecurringModal()">&#10005;</button>
+    </div>
+    <div class="rcr-add-form">
+        <input id="rcr-add-text" type="text" placeholder="Task name" autocomplete="off">
+        <select id="rcr-add-section">
+            <option value="Monday">Monday</option>
+            <option value="Tuesday">Tuesday</option>
+            <option value="Wednesday">Wednesday</option>
+            <option value="Thursday">Thursday</option>
+            <option value="Friday">Friday</option>
+            <option value="Saturday">Saturday</option>
+            <option value="Sunday">Sunday</option>
+            <option value="Someday">Someday</option>
+        </select>
+        <select id="rcr-add-recur">
+            <option value="daily">Daily</option>
+            <option value="weekdays">Weekdays</option>
+            <option value="every Mon">Every Mon</option>
+            <option value="every Tue">Every Tue</option>
+            <option value="every Wed">Every Wed</option>
+            <option value="every Thu">Every Thu</option>
+            <option value="every Fri">Every Fri</option>
+            <option value="every Sat">Every Sat</option>
+            <option value="every Sun">Every Sun</option>
+            <option value="weekly">Weekly</option>
+            <option value="biweekly">Biweekly</option>
+            <option value="monthly">Monthly</option>
+            <option value="annually">Annually</option>
+        </select>
+        <span id="rcr-day-wrap" style="display:none;align-items:center;gap:4px;font-size:0.75rem;color:#888">
+            on the <input id="rcr-add-day" type="number" min="1" max="31" placeholder="DD" style="width:44px;text-align:center"> th
+        </span>
+        <button class="rcr-add-btn" onclick="submitAddRecurring()">+ Add</button>
+    </div>
+    <div class="rcr-bulk-bar" id="rcr-bulk-bar">
+        <span class="rcr-bulk-count" id="rcr-bulk-count">0 selected</span>
+        <button class="rcr-bulk-delete" onclick="bulkDeleteRecurring()">&#10005; Delete selected</button>
+        <button class="rcr-bulk-clear" onclick="clearRcrSelection()">Cancel</button>
+    </div>
+    <div class="rcr-table-wrap">
+        <table class="rcr-table">
+            <thead>
+                <tr>
+                    <th style="width:24px"><input type="checkbox" id="rcr-check-all" class="rcr-row-check"></th>
+                    <th>Task</th>
+                    <th>Section</th>
+                    <th>Schedule</th>
+                    <th class="rcr-count-hdr">Weeks</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="rcr-tbody"></tbody>
+        </table>
+    </div>
+</div>
+
 <!-- Birthday modal -->
 <div id="birthday-modal">
     <div class="bday-modal-header">
@@ -253,6 +314,10 @@ async function goToToday() {
     applyCollapsedStates();
     localStorage.setItem(SOMEDAY_COLLAPSED_KEY, '1');
     document.getElementById('wp-someday').classList.add('collapsed');
+
+    // Hide completed tasks
+    localStorage.setItem(HIDE_DONE_KEY, 'true');
+    applyHideDone();
 }
 
 let currentWeekMonday = null;
@@ -1495,6 +1560,192 @@ async function bulkApplyReminder() {
 // Enter key in add form
 document.querySelector('.bday-add-form').addEventListener('keydown', e => {
     if (e.key === 'Enter') submitAddBirthday();
+});
+
+// ── Recurring Manager ──────────────────────────────────────────────────────────
+
+function rcrIsMonthly(recur) {
+    return /^(monthly|annually|every \d+ months?|every \d+ years?)$/.test(recur.toLowerCase().trim());
+}
+
+let rcrSelected = new Set();
+
+function openRecurringModal() {
+    document.getElementById('recurring-modal').classList.add('open');
+    loadRecurring();
+}
+function closeRecurringModal() {
+    document.getElementById('recurring-modal').classList.remove('open');
+    rcrSelected.clear();
+}
+
+function updateRcrBulkBar() {
+    const n = rcrSelected.size;
+    document.getElementById('rcr-bulk-count').textContent = `${n} selected`;
+    document.getElementById('rcr-bulk-bar').classList.toggle('visible', n > 0);
+    const allChecks = document.querySelectorAll('.rcr-item-check');
+    const hdr = document.getElementById('rcr-check-all');
+    hdr.checked = allChecks.length > 0 && Array.from(allChecks).every(c => c.checked);
+    hdr.indeterminate = n > 0 && !hdr.checked;
+}
+
+function clearRcrSelection() {
+    rcrSelected.clear();
+    document.querySelectorAll('.rcr-item-check').forEach(cb => {
+        cb.checked = false;
+        cb.closest('tr').classList.remove('selected');
+    });
+    const hdr = document.getElementById('rcr-check-all');
+    hdr.checked = false;
+    hdr.indeterminate = false;
+    updateRcrBulkBar();
+}
+
+function rcrCadenceLabel(recur) {
+    if (!recur) return 'Other';
+    const r = recur.toLowerCase().trim();
+    if (r === 'daily') return 'Daily';
+    if (r === 'weekdays') return 'Weekdays';
+    if (r === 'weekly' || /^every (mon|tue|wed|thu|fri|sat|sun)$/i.test(r)) return 'Weekly';
+    if (r === 'biweekly' || r === 'every 2 weeks') return 'Biweekly';
+    if (/^every \d+ weeks?$/.test(r)) return 'Every N Weeks';
+    if (r === 'monthly') return 'Monthly';
+    if (/^every \d+ months?$/.test(r)) return 'Every N Months';
+    if (r === 'annually') return 'Annually';
+    if (/^every \d+ years?$/.test(r)) return 'Every N Years';
+    return 'Other';
+}
+
+function rcrCadenceSortKey(recur) {
+    const order = ['Daily','Weekdays','Weekly','Biweekly','Every N Weeks','Monthly','Every N Months','Annually','Every N Years','Other'];
+    const i = order.indexOf(rcrCadenceLabel(recur));
+    return i >= 0 ? i : 999;
+}
+
+async function loadRecurring() {
+    const res = await fetchApi('/api/recurring');
+    if (!res) return;
+    const tasks = await res.json();
+    const tbody = document.getElementById('rcr-tbody');
+    rcrSelected.clear();
+    updateRcrBulkBar();
+    if (!tasks.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="rcr-empty">No recurring tasks.</td></tr>';
+        return;
+    }
+    tasks.sort((a, b) => {
+        const cd = rcrCadenceSortKey(a.recur) - rcrCadenceSortKey(b.recur);
+        if (cd !== 0) return cd;
+        return a.text.localeCompare(b.text);
+    });
+    let currentGroup = null;
+    let html = '';
+    for (const t of tasks) {
+        const group = rcrCadenceLabel(t.recur);
+        if (group !== currentGroup) {
+            currentGroup = group;
+            html += `<tr class="rcr-group-row"><td colspan="6">${esc(group)}</td></tr>`;
+        }
+        const key = JSON.stringify([t.text, t.recur]);
+        html += `<tr data-text="${esc(t.text)}" data-section="${esc(t.section)}" data-recur="${esc(t.recur)}" data-key="${esc(key)}">
+            <td><input type="checkbox" class="rcr-row-check rcr-item-check" data-key="${esc(key)}"></td>
+            <td class="rcr-text-cell">${esc(t.text)}</td>
+            <td class="rcr-section-cell">${esc(t.section)}</td>
+            <td class="rcr-recur-cell">${esc(t.recur)}</td>
+            <td class="rcr-count-cell">${t.week_count}</td>
+            <td><button class="rcr-del-btn" title="Delete all instances">&#215;</button></td>
+        </tr>`;
+    }
+    tbody.innerHTML = html;
+    tbody.querySelectorAll('.rcr-item-check').forEach(cb => {
+        cb.addEventListener('change', e => {
+            e.stopPropagation();
+            if (e.target.checked) rcrSelected.add(e.target.dataset.key);
+            else rcrSelected.delete(e.target.dataset.key);
+            e.target.closest('tr').classList.toggle('selected', e.target.checked);
+            updateRcrBulkBar();
+        });
+    });
+    tbody.querySelectorAll('.rcr-del-btn').forEach(btn => {
+        const tr = btn.closest('tr');
+        btn.addEventListener('click', () =>
+            deleteRecurring(tr.dataset.text, tr.dataset.recur));
+    });
+}
+
+document.getElementById('rcr-check-all').addEventListener('change', e => {
+    document.querySelectorAll('.rcr-item-check').forEach(cb => {
+        cb.checked = e.target.checked;
+        cb.closest('tr').classList.toggle('selected', e.target.checked);
+        if (e.target.checked) rcrSelected.add(cb.dataset.key);
+        else rcrSelected.delete(cb.dataset.key);
+    });
+    updateRcrBulkBar();
+});
+
+async function bulkDeleteRecurring() {
+    if (!rcrSelected.size) return;
+    if (!confirm(`Delete ${rcrSelected.size} recurring task(s)? This cannot be undone.`)) return;
+    const items = Array.from(rcrSelected).map(k => JSON.parse(k));
+    for (const [text, recur] of items) {
+        await fetchApi('/api/recurring', {
+            method: 'DELETE',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ text, recur }),
+        });
+    }
+    loadRecurring();
+    loadWeek(currentWeekMonday);
+}
+
+async function submitAddRecurring() {
+    const text = document.getElementById('rcr-add-text').value.trim();
+    const section = document.getElementById('rcr-add-section').value;
+    const recur = document.getElementById('rcr-add-recur').value;
+    if (!text) return;
+    const body = { text, section, recur, week_monday: currentWeekMonday };
+    if (rcrIsMonthly(recur)) {
+        const d = parseInt(document.getElementById('rcr-add-day').value);
+        if (d >= 1 && d <= 31) body.day_of_month = d;
+    }
+    const res = await fetchApi('/api/recurring', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(body),
+    });
+    if (!res || !res.ok) return;
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    document.getElementById('rcr-add-text').value = '';
+    loadRecurring();
+    loadWeek(currentWeekMonday);
+}
+
+async function deleteRecurring(text, recur) {
+    if (!confirm(`Delete all instances of "${text}" (${recur})?\nThis cannot be undone.`)) return;
+    const res = await fetchApi('/api/recurring', {
+        method: 'DELETE',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ text, recur }),
+    });
+    if (!res || !res.ok) return;
+    loadRecurring();
+    loadWeek(currentWeekMonday);
+}
+
+document.getElementById('rcr-add-text').addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitAddRecurring();
+});
+document.getElementById('rcr-add-recur').addEventListener('change', function() {
+    const recur = this.value;
+    const r = recur.toLowerCase().trim();
+    const isDaily = r === 'daily' || r === 'weekdays';
+    const sectionEl = document.getElementById('rcr-add-section');
+    sectionEl.disabled = isDaily;
+    sectionEl.style.opacity = isDaily ? '0.35' : '1';
+    if (isDaily) sectionEl.value = 'Monday';
+    const wrap = document.getElementById('rcr-day-wrap');
+    wrap.style.display = rcrIsMonthly(recur) ? 'flex' : 'none';
 });
 </script>
 {% endblock %}

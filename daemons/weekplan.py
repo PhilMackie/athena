@@ -326,8 +326,6 @@ def get_or_create_week(date_str: str) -> dict:
             inserted = set()
 
             for t in carry:
-                if t["checked"]:
-                    continue
                 if t["section"] == 'Scratchpad':
                     continue
                 if not _should_carry(conn, t["text"], t["section"], t["recur"], week_monday):
@@ -892,5 +890,74 @@ def bulk_set_birthday_reminders(ids: list, reminder_offsets) -> dict:
                 (reminder_offsets, bid),
             )
     return {"status": "saved", "count": len(ids)}
+
+
+# ── Recurring Manager ──────────────────────────────────────────────────────────
+
+def list_recurring_tasks() -> list:
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT text, recur,
+                      MIN(section) AS section,
+                      COUNT(DISTINCT week_monday) AS week_count,
+                      MAX(week_monday) AS latest_week
+               FROM tasks
+               WHERE recur IS NOT NULL
+               GROUP BY text, recur
+               ORDER BY recur, text"""
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_recurring_task(text: str, section: str, recur: str, week_monday: str,
+                        day_of_month: int = None) -> dict:
+    text = text.strip()
+    if not text:
+        return {"error": "Text required"}
+    if section not in SECTIONS:
+        return {"error": "Invalid section"}
+    if not recur:
+        return {"error": "Recurrence required"}
+    # For monthly/annual patterns, anchor created_at to the requested day-of-month
+    # so _should_carry() uses the right origin date.
+    if day_of_month and _month_interval(recur) is not None:
+        try:
+            d = int(day_of_month)
+            today = date.today()
+            anchor = date(today.year, today.month, min(d, 28))
+            now = anchor.isoformat() + "T00:00:00"
+        except (ValueError, TypeError):
+            now = datetime.utcnow().isoformat()
+    else:
+        now = datetime.utcnow().isoformat()
+    with get_db() as conn:
+        already = conn.execute(
+            "SELECT 1 FROM tasks WHERE week_monday=? AND section=? AND text=?",
+            (week_monday, section, text),
+        ).fetchone()
+        if already:
+            return {"error": "Task already exists this week"}
+        max_pos = conn.execute(
+            "SELECT MAX(position) FROM tasks WHERE week_monday=? AND section=?",
+            (week_monday, section),
+        ).fetchone()[0]
+        pos = (max_pos or 0) + 1
+        conn.execute(
+            """INSERT INTO tasks
+               (id, week_monday, section, position, text, checked,
+                recur, attachment, note, created_at)
+               VALUES (?,?,?,?,?,0,?,NULL,NULL,?)""",
+            (str(uuid.uuid4()), week_monday, section, pos, text, recur, now),
+        )
+    return {"status": "saved"}
+
+
+def delete_all_recurring(text: str, recur: str) -> dict:
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM tasks WHERE text=? AND recur=?",
+            (text, recur),
+        )
+    return {"status": "deleted"}
 
 

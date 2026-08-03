@@ -42,7 +42,10 @@
 <div class="wp-scratchpad" id="wp-scratchpad">
     <div class="wp-scratchpad-header">
         Scratchpad
-        <button class="wp-day-eye" id="wp-scratchpad-eye" title="Hide/show">&#9900;</button>
+        <div class="wp-scratchpad-actions">
+            <button class="wp-scratchpad-purge" id="wp-scratchpad-purge" title="Move completed items to today">&#8595;</button>
+            <button class="wp-day-eye" id="wp-scratchpad-eye" title="Hide/show">&#9900;</button>
+        </div>
     </div>
     <div class="wp-scratchpad-tasks" id="scratchpad-tasks"></div>
     <div class="wp-scratchpad-add">
@@ -211,6 +214,11 @@
         </span>
         <button class="rcr-add-btn" onclick="submitAddRecurring()">+ Add</button>
     </div>
+    <div class="rcr-import-form">
+        <input id="rcr-import-file" type="file" accept=".csv">
+        <button class="rcr-add-btn" onclick="submitImportCsv()">Import Calendar CSV</button>
+        <span id="rcr-import-status"></span>
+    </div>
     <div class="rcr-bulk-bar" id="rcr-bulk-bar">
         <span class="rcr-bulk-count" id="rcr-bulk-count">0 selected</span>
         <button class="rcr-bulk-delete" onclick="bulkDeleteRecurring()">&#10005; Delete selected</button>
@@ -230,6 +238,10 @@
             </thead>
             <tbody id="rcr-tbody"></tbody>
         </table>
+        <div class="rcr-imported-section">
+            <h3>Imported Events</h3>
+            <div id="rcr-imported-list" class="rcr-imported-list"></div>
+        </div>
     </div>
 </div>
 
@@ -314,6 +326,8 @@ async function goToToday() {
     applyCollapsedStates();
     localStorage.setItem(SOMEDAY_COLLAPSED_KEY, '1');
     document.getElementById('wp-someday').classList.add('collapsed');
+    localStorage.setItem(SCRATCHPAD_COLLAPSED_KEY, '1');
+    document.getElementById('wp-scratchpad').classList.add('collapsed');
 
     // Hide completed tasks
     localStorage.setItem(HIDE_DONE_KEY, 'true');
@@ -383,6 +397,17 @@ document.getElementById('wp-scratchpad-eye').addEventListener('click', () => {
     el.classList.toggle('collapsed', nowCollapsed);
 });
 applyScratchpadCollapsed();
+
+document.getElementById('wp-scratchpad-purge').addEventListener('click', async () => {
+    if (!currentWeekMonday) return;
+    const res = await fetchApi('/api/week/scratchpad-purge', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ date: currentWeekMonday }),
+    });
+    if (!res || !res.ok) return;
+    loadWeek(currentWeekMonday);
+});
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
@@ -1573,6 +1598,36 @@ let rcrSelected = new Set();
 function openRecurringModal() {
     document.getElementById('recurring-modal').classList.add('open');
     loadRecurring();
+    loadImportedEvents();
+}
+
+async function loadImportedEvents() {
+    const res = await fetchApi('/api/imported');
+    if (!res || !res.ok) return;
+    const items = await res.json();
+    const list = document.getElementById('rcr-imported-list');
+    if (!items.length) {
+        list.innerHTML = '<div class="rcr-imported-empty">No imported events</div>';
+        return;
+    }
+    list.innerHTML = items.map(item => `
+        <div class="rcr-imported-row">
+            <span class="rcr-imported-date">${item.date}</span>
+            <span class="rcr-imported-text">${esc(item.text)}</span>
+            <button class="rcr-imported-del" onclick="deleteImportedEvent('${item.id}')">&#10005;</button>
+        </div>
+    `).join('');
+}
+
+async function deleteImportedEvent(id) {
+    const res = await fetchApi('/api/imported', {
+        method: 'DELETE',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ id }),
+    });
+    if (!res || !res.ok) return;
+    loadImportedEvents();
+    if (currentWeekMonday) loadWeek(currentWeekMonday);
 }
 function closeRecurringModal() {
     document.getElementById('recurring-modal').classList.remove('open');
@@ -1719,6 +1774,29 @@ async function submitAddRecurring() {
     document.getElementById('rcr-add-text').value = '';
     loadRecurring();
     loadWeek(currentWeekMonday);
+}
+
+async function submitImportCsv() {
+    const fileInput = document.getElementById('rcr-import-file');
+    const statusEl = document.getElementById('rcr-import-status');
+    const file = fileInput.files[0];
+    if (!file) { statusEl.textContent = 'Choose a CSV file first'; return; }
+
+    const formData = new FormData();
+    formData.append('file', file);
+    statusEl.textContent = 'Importing…';
+
+    const res = await fetchApi('/api/import/calendar-csv', { method: 'POST', body: formData });
+    if (!res) return;
+    const data = await res.json();
+    if (!res.ok || data.error) {
+        statusEl.textContent = 'Error: ' + (data.error || 'import failed');
+        return;
+    }
+    statusEl.textContent = `Imported ${data.imported}, skipped ${data.skipped}`;
+    fileInput.value = '';
+    loadImportedEvents();
+    if (currentWeekMonday) loadWeek(currentWeekMonday);
 }
 
 async function deleteRecurring(text, recur) {

@@ -13,9 +13,10 @@ from daemons.weekplan import (
     get_or_create_week, add_task, toggle_task, delete_task, delete_task_all_future,
     set_task_recur, defer_task, duplicate_task, attach_file, reorder_section,
     set_task_note, rename_task, set_task_binding, toggle_step, set_step_count,
-    set_task_color,
+    set_task_color, purge_scratchpad_done,
     list_birthdays, add_birthday, delete_birthday, bulk_set_birthday_reminders,
     list_recurring_tasks, add_recurring_task, delete_all_recurring,
+    import_calendar_csv, list_imported_tasks, delete_imported_task,
 )
 
 logging.basicConfig(
@@ -252,6 +253,19 @@ def api_task_defer():
     if "error" in result:
         return jsonify(result), 400
     logger.info(f"Task deferred: [{section}] idx {section_idx} -> {defer_to}")
+    return jsonify(result)
+
+
+@app.route("/api/week/scratchpad-purge", methods=["POST"])
+@login_required
+def api_scratchpad_purge():
+    data = request.get_json() or {}
+    date_str = data.get("date", "")
+    if not date_str:
+        return jsonify({"error": "date required"}), 400
+    result = purge_scratchpad_done(date_str)
+    if "error" in result:
+        return jsonify(result), 400
     return jsonify(result)
 
 
@@ -536,6 +550,40 @@ def api_recurring_delete():
     if not text or not recur:
         return jsonify({"error": "text, recur required"}), 400
     return jsonify(delete_all_recurring(text, recur))
+
+
+@app.route("/api/import/calendar-csv", methods=["POST"])
+@login_required
+def api_import_calendar_csv():
+    if "file" in request.files:
+        csv_text = request.files["file"].read().decode("utf-8-sig", errors="replace")
+    else:
+        csv_text = (request.get_json() or {}).get("csv_text", "")
+    if not csv_text.strip():
+        return jsonify({"error": "No CSV content provided"}), 400
+    result = import_calendar_csv(csv_text)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/imported", methods=["GET"])
+@login_required
+def api_imported_list():
+    return jsonify(list_imported_tasks())
+
+
+@app.route("/api/imported", methods=["DELETE"])
+@login_required
+def api_imported_delete():
+    data = request.get_json() or {}
+    task_id = data.get("id", "")
+    if not task_id:
+        return jsonify({"error": "id required"}), 400
+    result = delete_imported_task(task_id)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
 
 
 if __name__ == "__main__":

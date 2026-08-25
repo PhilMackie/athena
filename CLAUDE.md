@@ -2,7 +2,15 @@
 
 Weekly planner — 7-column grid with Someday backlog. Flask service on port 5002, deployed alongside duo-brain and Chronos on the Pi.
 
-**Phil's Notes:** `/home/phil/Documents/philVault/Projects/Athena/`
+**Phil's Notes:** `/home/phil/Documents/philVault/dev/Athena/`
+
+## ⚠️ Vault Reorg (2026-08-25) — read this first
+
+Phil restructured `philVault/` from ~14 sprawling top-level folders into 6 categories: `work/`, `dev/`, `creative/`, `life/`, `trading/`, `gaming/` — each with its own `projects/` and `journal/` subfolder. Athena's own notes moved from `Projects/Athena/` to `dev/Athena/`. Quanta (duo-brain) lives at `dev/Quanta/` now (was `Projects/Quanta/`).
+
+**This broke `config.py`'s `TEMPLATES_DIR`** (line 23) — it's still hardcoded to the old `OBSIDIAN_VAULT / "Projects" / "Quanta" / "Templates"` path. The real path is now `OBSIDIAN_VAULT / "dev" / "Quanta" / "Templates"`. Until this is fixed, `WeeklyRecurring.md` (the ghost-indicator recurring tasks shown in every day column, see "Storage" below) can't be read. Tracked in `todo.md` under Active — see duo-brain's `config.py`/`daemons/goals.py`/`daemons/projects.py` for the equivalent fix already applied there as a reference.
+
+Full migration plan/rationale: `philVault/dev/Quanta/vault-reorg-plan.md`.
 
 ## Deployment Rules
 **Never deploy to the Pi without Phil explicitly saying so.** Do not run deploy scripts, rsync to `duobrain.local`, SSH to `pi@duobrain.local`, or restart services via `systemctl`. Always describe what you want to deploy and wait for confirmation. A global hook will block these commands regardless.
@@ -11,7 +19,7 @@ Weekly planner — 7-column grid with Someday backlog. Flask service on port 500
 - PROD: Pi at `duobrain.local` — deploy only on explicit instruction
 
 ## Key Resources
-- **Architecture:** `philVault/Projects/Quanta/Personal Hub Architecture – Step-by-Step Plan.md`
+- **Architecture:** `philVault/dev/Quanta/Personal Hub Architecture – Step-by-Step Plan.md`
 
 ## Architecture
 
@@ -42,11 +50,12 @@ tasks (
     attachment   TEXT,
     note         TEXT,
     created_at   TEXT NOT NULL,
-    completed_at TEXT                 -- set when checked, cleared when unchecked
+    completed_at TEXT,                -- set when checked, cleared when unchecked
+    source       TEXT                 -- 'csv_import' for Google Calendar CSV imports, NULL otherwise
 )
 ```
 
-**Global recurring tasks:** `vault/Projects/Quanta/Templates/WeeklyRecurring.md`
+**Global recurring tasks:** `vault/dev/Quanta/Templates/WeeklyRecurring.md`
 Read-only markdown list, shown in every day column as ghost indicators.
 
 ## API Routes
@@ -64,6 +73,10 @@ Read-only markdown list, shown in every day column as ghost indicators.
 | POST | `/api/week/duplicate` | Duplicate task |
 | POST | `/api/week/attach` | Attach file reference |
 | POST | `/api/week/reorder` | Reorder section |
+| POST | `/api/week/scratchpad-purge` | Move checked Scratchpad tasks to today's day column (stays checked) |
+| POST | `/api/import/calendar-csv` | Import Google Calendar-compliant CSV (multipart `file` or `csv_text`) |
+| GET | `/api/imported` | List CSV-imported tasks (flat, sorted by date) |
+| DELETE | `/api/imported` | Delete one CSV-imported task by `id` |
 
 ## UI — Key Patterns
 
@@ -118,3 +131,4 @@ Logs: `/opt/athena/logs/`
 - SortableJS cross-column drag uses `group: 'week-tasks'` on all containers including Someday
 - Someday container needs `data-date` and `data-section` set before SortableJS init
 - `migrate.py` must be run from `/opt/athena/app/` on the Pi so `config` is importable
+- `import_calendar_csv`: `csv.DictReader` gives short rows `None` (not `""`) for missing trailing columns, and unquoted commas inside the last column spill into `row[None]` (restkey) instead of staying in that field — both handled defensively, but a reminder that hand-built "Google Calendar CSV" exports are rarely well-formed

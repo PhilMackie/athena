@@ -20,6 +20,6 @@ AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
 
 # Obsidian vault path
 OBSIDIAN_VAULT = Path(os.getenv("OBSIDIAN_VAULT", "/home/phil/Documents/philVault"))
-TEMPLATES_DIR = OBSIDIAN_VAULT / "Projects" / "Quanta" / "Templates"
+TEMPLATES_DIR = OBSIDIAN_VAULT / "dev" / "Quanta" / "Templates"
 
 INTERNAL_TOKEN = os.environ.get('INTERNAL_TOKEN', 'athena-internal')

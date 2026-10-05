@@ -421,6 +421,10 @@ def get_or_create_week(date_str: str) -> dict:
                         inserted.add(key)
                         continue
                     inserted.add(key)
+                    # Fresh (unchecked) steps for the new week, not the prior
+                    # instance's in-progress checked state.
+                    fresh_steps = (json.dumps([0] * len(json.loads(t["steps"])))
+                                    if t["steps"] else None)
                     conn.execute(
                         """INSERT INTO tasks
                            (id, week_monday, section, position, text, checked,
@@ -428,7 +432,7 @@ def get_or_create_week(date_str: str) -> dict:
                            VALUES (?,?,?,?,?,0,?,?,?,?,?,?,?,?)""",
                         (str(uuid.uuid4()), week_monday, target_section, 999,
                          t["text"], t["recur"], t["attachment"], t["note"], now,
-                         t["nra_binding"], t["dwm_binding"], t["steps"], t["color"]),
+                         t["nra_binding"], t["dwm_binding"], fresh_steps, t["color"]),
                     )
             for section in DAY_NAMES:
                 _normalize_positions(conn, week_monday, section)
@@ -659,6 +663,10 @@ def set_task_recur(date_str: str, section: str, section_idx: int, recur: str) ->
 
         if recur_val and section != 'Someday':
             now = datetime.utcnow().isoformat()
+            # Each recurring copy gets its own fresh (unchecked) set of steps,
+            # not the original's in-progress checked state.
+            fresh_steps = (json.dumps([0] * len(json.loads(task["steps"])))
+                            if task["steps"] else None)
             # Expand to sibling sections in the current week (daily/weekdays patterns)
             for target_section in _sections_for_recur(section, recur_val):
                 if target_section == section:
@@ -671,11 +679,11 @@ def set_task_recur(date_str: str, section: str, section_idx: int, recur: str) ->
                     conn.execute(
                         """INSERT INTO tasks
                            (id, week_monday, section, position, text, checked,
-                            recur, attachment, note, created_at, nra_binding, dwm_binding)
-                           VALUES (?,?,?,?,?,0,?,?,?,?,?,?)""",
+                            recur, attachment, note, created_at, nra_binding, dwm_binding, steps)
+                           VALUES (?,?,?,?,?,0,?,?,?,?,?,?,?)""",
                         (str(uuid.uuid4()), week_monday, target_section, 999,
                          task["text"], recur_val, task["attachment"], task["note"],
-                         now, task["nra_binding"], task["dwm_binding"]),
+                         now, task["nra_binding"], task["dwm_binding"], fresh_steps),
                     )
                     _normalize_positions(conn, week_monday, target_section)
             # Forward-fill next 52 weeks
@@ -710,11 +718,11 @@ def set_task_recur(date_str: str, section: str, section_idx: int, recur: str) ->
                     conn.execute(
                         """INSERT INTO tasks
                            (id, week_monday, section, position, text, checked,
-                            recur, attachment, note, created_at, nra_binding, dwm_binding, color)
-                           VALUES (?,?,?,?,?,0,?,?,?,?,?,?,?)""",
+                            recur, attachment, note, created_at, nra_binding, dwm_binding, color, steps)
+                           VALUES (?,?,?,?,?,0,?,?,?,?,?,?,?,?)""",
                         (str(uuid.uuid4()), fw, target_section, (fw_pos or 0) + 1,
                          task["text"], recur_val, task["attachment"], task["note"],
-                         now, task["nra_binding"], task["dwm_binding"], task["color"]),
+                         now, task["nra_binding"], task["dwm_binding"], task["color"], fresh_steps),
                     )
     return {"status": "saved"}
 

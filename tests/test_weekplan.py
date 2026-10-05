@@ -724,6 +724,24 @@ class TestSteps(unittest.TestCase):
         result = weekplan.toggle_step(MONDAY, "Monday", 0, 0, True)
         self.assertFalse(result.get("auto_complete"))
 
+    def test_steps_carried_with_recurring_task(self):
+        weekplan.set_step_count(MONDAY, "Monday", 0, 3)
+        weekplan.set_task_recur(MONDAY, "Monday", 0, "daily")
+        data = weekplan.get_or_create_week(MONDAY)
+        tue = next(d for d in data["days"] if d["name"] == "Tuesday")
+        item = next(t for t in tue["items"] if t["text"] == "Stepped task")
+        self.assertEqual(item["steps"], [0, 0, 0])
+
+    def test_steps_carried_fresh_into_next_week(self):
+        weekplan.set_step_count(MONDAY, "Monday", 0, 3)
+        weekplan.set_task_recur(MONDAY, "Monday", 0, "weekly")
+        weekplan.toggle_step(MONDAY, "Monday", 0, 0, True)
+        weekplan.toggle_step(MONDAY, "Monday", 0, 1, True)
+        data = weekplan.get_or_create_week(NEXT_MON)
+        mon = next(d for d in data["days"] if d["name"] == "Monday")
+        item = next(t for t in mon["items"] if t["text"] == "Stepped task")
+        self.assertEqual(item["steps"], [0, 0, 0])
+
 
 # ── Bindings ──────────────────────────────────────────────────────────────────
 

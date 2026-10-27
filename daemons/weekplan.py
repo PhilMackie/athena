@@ -616,6 +616,14 @@ def delete_task_all_future(date_str: str, section: str, section_idx: int) -> dic
             "DELETE FROM tasks WHERE text=? AND recur IS NOT NULL AND week_monday >= ?",
             (task["text"], week_monday),
         )
+        # Clear recur on older instances too — otherwise get_or_create_week's
+        # carry-forward scan (which looks up to 52 weeks back for any row with
+        # recur set) resurrects the series the first time a not-yet-visited
+        # future week is opened, undoing this delete.
+        conn.execute(
+            "UPDATE tasks SET recur=NULL WHERE text=? AND recur IS NOT NULL AND week_monday < ?",
+            (task["text"], week_monday),
+        )
     return {"status": "saved"}
 
 
@@ -1213,6 +1221,25 @@ def import_calendar_csv(csv_text: str) -> dict:
             return ""
         val = row.get(key)
         return val.strip() if val else ""
+
+    # Re-importing should fully replace upcoming imported events — otherwise
+    # events deleted on the source calendar keep reappearing in Athena since
+    # import only ever adds rows and nothing else ever removes them.
+    # Past imported events are left alone so history isn't wiped.
+    today = date.today()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, week_monday, section FROM tasks WHERE source='csv_import'"
+        ).fetchall()
+        for r in rows:
+            if r["section"] not in DAY_NAMES:
+                continue
+            day_offset = DAY_NAMES.index(r["section"])
+            event_date = date.fromisoformat(r["week_monday"]) + timedelta(days=day_offset)
+            if event_date >= today:
+                conn.execute("DELETE FROM tasks WHERE id=?", (r["id"],))
+        for wm, section in {(r["week_monday"], r["section"]) for r in rows}:
+            _normalize_positions(conn, wm, section)
 
     imported = 0
     skipped = 0

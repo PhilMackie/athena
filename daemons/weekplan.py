@@ -180,8 +180,6 @@ def init_db():
             "UPDATE tasks SET week_monday=? WHERE section='Someday' AND week_monday!=?",
             (SOMEDAY_WEEK, SOMEDAY_WEEK)
         )
-        # Release any tasks stuck in blocks
-        conn.execute("UPDATE tasks SET block_id=NULL WHERE block_id IS NOT NULL")
         # Retroactively forward-fill recurring tasks into already-initialized weeks
         if not conn.execute("SELECT 1 FROM migrations WHERE name='forward_fill_recurring_v3'").fetchone():
             _migrate_forward_fill_recurring(conn)
@@ -236,6 +234,7 @@ def _row_to_task(row, section_idx: int) -> dict:
         "dwm_binding": row["dwm_binding"],
         "steps":       json.loads(row["steps"]) if row["steps"] else [],
         "color":       row["color"],
+        "block_id":    row["block_id"],
     }
 
 
@@ -816,17 +815,14 @@ def defer_task(date_str: str, section: str, section_idx: int, defer_to: str) -> 
         else:
             return {"error": f"Unknown defer_to: {defer_to}"}
 
-        old_block_id = task["block_id"]
         max_pos = conn.execute(
-            "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE week_monday=? AND section=? AND block_id IS NULL",
+            "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE week_monday=? AND section=?",
             (target_monday, target_section),
         ).fetchone()[0]
         conn.execute(
-            "UPDATE tasks SET week_monday=?, section=?, position=?, checked=0, block_id=NULL WHERE id=?",
+            "UPDATE tasks SET week_monday=?, section=?, position=?, checked=0 WHERE id=?",
             (target_monday, target_section, max_pos + 1, task["id"]),
         )
-        if old_block_id:
-            _normalize_block_positions(conn, old_block_id)
         _normalize_positions(conn, week_monday, section)
         _normalize_positions(conn, target_monday, target_section)
 
@@ -873,35 +869,19 @@ def duplicate_task(date_str: str, section: str, section_idx: int) -> dict:
         if not task:
             return {"error": "Task not found"}
         now = datetime.utcnow().isoformat()
-        block_id = task["block_id"]
-        if block_id:
-            conn.execute(
-                "UPDATE tasks SET position=position+1 WHERE block_id=? AND position>?",
-                (block_id, task["position"]),
-            )
-            conn.execute(
-                """INSERT INTO tasks
-                   (id, week_monday, section, position, text, checked,
-                    recur, attachment, note, created_at, block_id)
-                   VALUES (?,?,?,?,?,0,?,?,?,?,?)""",
-                (str(uuid.uuid4()), week_monday, section, task["position"] + 1,
-                 task["text"], task["recur"], task["attachment"], task["note"], now, block_id),
-            )
-            _normalize_block_positions(conn, block_id)
-        else:
-            conn.execute(
-                "UPDATE tasks SET position=position+1 WHERE week_monday=? AND section=? AND block_id IS NULL AND position>?",
-                (week_monday, section, task["position"]),
-            )
-            conn.execute(
-                """INSERT INTO tasks
-                   (id, week_monday, section, position, text, checked,
-                    recur, attachment, note, created_at)
-                   VALUES (?,?,?,?,?,0,?,?,?,?)""",
-                (str(uuid.uuid4()), week_monday, section, task["position"] + 1,
-                 task["text"], task["recur"], task["attachment"], task["note"], now),
-            )
-            _normalize_positions(conn, week_monday, section)
+        conn.execute(
+            "UPDATE tasks SET position=position+1 WHERE week_monday=? AND section=? AND position>?",
+            (week_monday, section, task["position"]),
+        )
+        conn.execute(
+            """INSERT INTO tasks
+               (id, week_monday, section, position, text, checked,
+                recur, attachment, note, created_at, block_id)
+               VALUES (?,?,?,?,?,0,?,?,?,?,?)""",
+            (str(uuid.uuid4()), week_monday, section, task["position"] + 1,
+             task["text"], task["recur"], task["attachment"], task["note"], now, task["block_id"]),
+        )
+        _normalize_positions(conn, week_monday, section)
     return {"status": "saved"}
 
 
@@ -940,6 +920,21 @@ def set_task_color(date_str: str, section: str, section_idx: int, color: str) ->
                 "UPDATE tasks SET color=? WHERE text=? AND section=? AND recur=? AND week_monday > ?",
                 (val, task["text"], section, task["recur"], week_monday),
             )
+    return {"status": "saved"}
+
+
+def set_task_block(date_str: str, section: str, section_idx: int, block_id: str) -> dict:
+    """Tag/untag a task with a Time Block id. The task stays exactly where it
+    is (day/Scratchpad/Someday) — this only controls whether it also shows up
+    inside that block. block_id=None clears the tag."""
+    if section not in SECTIONS:
+        return {"error": "Invalid section"}
+    week_monday = _get_monday(date_str)
+    with get_db() as conn:
+        task = _get_task_by_idx(conn, week_monday, section, section_idx)
+        if not task:
+            return {"error": "Task not found"}
+        conn.execute("UPDATE tasks SET block_id=? WHERE id=?", (block_id or None, task["id"]))
     return {"status": "saved"}
 
 

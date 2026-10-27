@@ -15,6 +15,7 @@
         <button class="logout-btn" id="toggle-done-btn" title="Hide/show done">&#10003;</button>
         <button class="logout-btn" id="recurring-btn" title="Recurring" onclick="openRecurringModal()">&#8734;</button>
         <button class="logout-btn" id="birthday-btn" title="Birthdays" onclick="openBirthdayModal()">&#127874;</button>
+        <button class="logout-btn" id="blocks-btn" title="Time Blocks" onclick="toggleBlocksView()"><img src="/static/icons/lego-brick.svg" class="icon-lego icon-lego-btn" alt="Time Blocks"></button>
         <a href="#" class="logout-btn" onclick="navigateToQuanta();return false;">Quanta</a>
         <a href="/logout" class="logout-btn">Logout</a>
     </div>
@@ -123,6 +124,11 @@
         </div>
     </div>
 
+    <div class="wp-card-section" id="wp-card-block-section">
+        <div class="wp-card-label">File in Block</div>
+        <div class="wp-card-pills" id="wp-card-block-pills"></div>
+    </div>
+
     <div class="wp-card-section" id="wp-card-links-section">
         <div class="wp-card-label">Links</div>
         <div class="wp-custom-recur-row" style="margin-bottom:6px">
@@ -145,6 +151,63 @@
         <button class="wp-card-action-btn" id="wp-card-duplicate">Duplicate</button>
         <button class="wp-card-action-btn" id="wp-card-attach">Attach&#8230;</button>
         <button class="wp-card-action-btn wp-card-danger" id="wp-card-delete">Delete</button>
+    </div>
+</div>
+
+<!-- Block task card panel -->
+<div id="wp-block-card-panel" style="display:none">
+    <div class="wp-card-header">
+        <input type="text" class="wp-card-title" id="wp-block-card-title" autocomplete="off">
+        <button class="wp-card-close" id="wp-block-card-close">&#10005;</button>
+    </div>
+
+    <div class="wp-card-section">
+        <div class="wp-card-label">Notes</div>
+        <textarea id="wp-block-card-notes" class="wp-card-notes-input" placeholder="Add a note..."></textarea>
+    </div>
+
+    <div class="wp-card-section">
+        <div class="wp-card-label">Color</div>
+        <div class="wp-card-color-swatches" id="wp-block-card-color-swatches"></div>
+    </div>
+
+    <div class="wp-card-section">
+        <div class="wp-card-label">Also show on</div>
+        <div class="wp-card-pills">
+            <button class="wp-card-pill" id="wp-block-send-today">Today</button>
+        </div>
+        <div class="wp-custom-recur-row" style="margin-top:6px">
+            <select id="wp-block-move-section" class="wp-recur-unit-select">
+                <option value="Monday">Monday</option>
+                <option value="Tuesday">Tuesday</option>
+                <option value="Wednesday">Wednesday</option>
+                <option value="Thursday">Thursday</option>
+                <option value="Friday">Friday</option>
+                <option value="Saturday">Saturday</option>
+                <option value="Sunday">Sunday</option>
+                <option value="Scratchpad">Scratchpad</option>
+                <option value="Someday">Someday</option>
+            </select>
+            <button id="wp-block-move-btn" class="wp-card-pill active">Add</button>
+        </div>
+    </div>
+
+    <div class="wp-card-section wp-card-actions">
+        <button class="wp-card-action-btn wp-card-danger" id="wp-block-card-delete">Delete</button>
+    </div>
+</div>
+
+<!-- Block delete confirm modal -->
+<div class="wp-modal-overlay" id="wp-block-delete-modal" style="display:none">
+    <div class="wp-modal-box">
+        <div class="wp-modal-title">Delete block</div>
+        <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:14px">
+            This deletes the block and all of its tasks. This can't be undone.
+        </div>
+        <div class="wp-modal-actions">
+            <button class="wp-modal-btn wp-modal-cancel" id="wp-block-delete-cancel">Cancel</button>
+            <button class="wp-modal-btn wp-modal-confirm" id="wp-block-delete-confirm">Delete</button>
+        </div>
     </div>
 </div>
 
@@ -285,6 +348,18 @@
             </thead>
             <tbody id="bday-tbody"></tbody>
         </table>
+    </div>
+</div>
+
+<!-- Time Blocks modal -->
+<div id="blocks-modal">
+    <div class="blk-modal-header">
+        <h2><img src="/static/icons/lego-brick.svg" class="icon-lego icon-lego-title" alt=""> Time Blocks</h2>
+        <button class="blk-modal-close" onclick="closeBlocksView()">&#10005;</button>
+    </div>
+    <div class="blk-stack-wrap">
+        <div class="blk-stack" id="blk-stack"></div>
+        <button class="blk-add-block-btn" id="blk-add-block-btn">+ Add Block</button>
     </div>
 </div>
 {% endblock %}
@@ -446,6 +521,9 @@ async function loadWeek(dateStr) {
         if (!res) return;
         if (!res.ok) throw new Error(await res.text());
         renderWeek(await res.json());
+        if (document.getElementById('blocks-modal').classList.contains('open')) {
+            loadBlocks();
+        }
     } catch (err) {
         console.error('Athena load error:', err);
     }
@@ -600,6 +678,7 @@ function makeTaskEl(task, dateStr, section, prefixColorMap = {}) {
     const steps = task.steps || [];
     div.dataset.steps = JSON.stringify(steps);
     div.dataset.color = task.color || '';
+    div.dataset.blockId = task.block_id || '';
     if (task.color && COLOR_MAP[task.color]) {
         applyTaskColor(div, task.color, false);
     } else {
@@ -616,6 +695,7 @@ function makeTaskEl(task, dateStr, section, prefixColorMap = {}) {
     if (task.attachment) badges += `<span class="wp-attach-badge" title="${esc(task.attachment)}">&#128206;</span>`;
     if (task.note) badges += `<span class="wp-note-dot">&#183;</span>`;
     if (task.nra_binding || task.dwm_binding) badges += `<span class="wp-binding-badge" title="${esc([task.nra_binding, task.dwm_binding].filter(Boolean).join(' / '))}">&#8853;</span>`;
+    if (task.block_id) badges += `<span class="wp-block-badge" title="Filed in a Time Block"><img src="/static/icons/lego-brick.svg" class="icon-lego icon-lego-badge" alt=""></span>`;
 
     const checkAttrs = task.checked ? 'checked' : '';
     const blockedClass = stepsBlocked ? ' steps-blocked' : '';
@@ -658,6 +738,7 @@ function makeTaskEl(task, dateStr, section, prefixColorMap = {}) {
             dwm_binding: task.dwm_binding || null,
             steps: steps,
             color: task.color || null,
+            block_id: task.block_id || null,
         });
     });
 
@@ -932,6 +1013,7 @@ function openCardPanel(task) {
         dwm_binding: task.dwm_binding || null,
         steps: task.steps ? JSON.parse(JSON.stringify(task.steps)) : [],
         color: task.color || null,
+        block_id: task.block_id || null,
     };
 
     const titleEl = document.getElementById('wp-card-title');
@@ -965,9 +1047,12 @@ function openCardPanel(task) {
 
     document.getElementById('wp-steps-count').value = activeCard.steps.length;
     document.getElementById('wp-card-defer-section').style.display = activeCard.is_someday ? 'none' : '';
-    document.getElementById('wp-card-panel').style.display = 'block';
+    const cardPanelEl = document.getElementById('wp-card-panel');
+    cardPanelEl.classList.toggle('above-blocks', document.getElementById('blocks-modal').classList.contains('open'));
+    cardPanelEl.style.display = 'block';
     loadBindingOptions();
     renderColorSwatches();
+    renderCardBlockPills();
 }
 
 async function saveCardTitle() {
@@ -1102,6 +1187,32 @@ document.getElementById('wp-card-defer-section').addEventListener('click', async
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: date_str, section, section_idx, defer_to: btn.dataset.defer }),
     });
+    loadWeek(currentWeekMonday);
+});
+
+document.getElementById('wp-card-block-pills').addEventListener('click', async function (e) {
+    const btn = e.target.closest('[data-move-to-block]');
+    if (!btn || !activeCard) return;
+    await saveCardChanges();
+    const { date_str, section, section_idx } = activeCard;
+    const blockId = btn.dataset.moveToBlock;
+    const alreadyLinked = activeCard.block_id === blockId;
+    if (alreadyLinked) {
+        activeCard.block_id = null;
+        await fetchApi('/api/blocks/task/unlink', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date: date_str, section, section_idx }),
+        });
+    } else {
+        activeCard.block_id = blockId;
+        await fetchApi('/api/blocks/task/link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date: date_str, section, section_idx, block_id: blockId }),
+        });
+    }
+    renderCardBlockPills();
     loadWeek(currentWeekMonday);
 });
 
@@ -1825,5 +1936,537 @@ document.getElementById('rcr-add-recur').addEventListener('change', function() {
     const wrap = document.getElementById('rcr-day-wrap');
     wrap.style.display = rcrIsMonthly(recur) ? 'flex' : 'none';
 });
+
+// ── Time Blocks ─────────────────────────────────────────────────────────────
+
+const ACTIVE_VIEW_KEY = 'athena-active-view';
+const BLOCKS_COLLAPSED_KEY = 'athena-blocks-collapsed';
+const TODAY_COLLAPSED_KEY = 'athena-blocks-today-collapsed';
+const FULL_DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+let cachedBlocks = [];
+let activeBlockCard = null;
+let blockCardTitleOriginal = '';
+let blockCardNoteOriginal = '';
+let blockSortables = [];
+let pendingBlockDeleteId = null;
+
+function todayDayName() {
+    return FULL_DAY_NAMES[new Date().getDay()];
+}
+
+function getCollapsedBlocks() {
+    try { return JSON.parse(localStorage.getItem(BLOCKS_COLLAPSED_KEY) || '[]'); } catch { return []; }
+}
+function setCollapsedBlocks(arr) {
+    localStorage.setItem(BLOCKS_COLLAPSED_KEY, JSON.stringify(arr));
+}
+
+function toggleBlocksView() {
+    const modal = document.getElementById('blocks-modal');
+    if (modal.classList.contains('open')) closeBlocksView();
+    else openBlocksView();
+}
+
+async function openBlocksView() {
+    document.getElementById('blocks-modal').classList.add('open');
+    localStorage.setItem(ACTIVE_VIEW_KEY, 'block');
+    await loadBlocks();
+}
+
+function closeBlocksView() {
+    document.getElementById('blocks-modal').classList.remove('open');
+    localStorage.setItem(ACTIVE_VIEW_KEY, 'daily');
+    closeBlockCardPanel();
+}
+
+async function fetchBlocksList() {
+    const res = await fetchApi('/api/blocks');
+    if (res && res.ok) cachedBlocks = await res.json();
+    return cachedBlocks;
+}
+
+async function fetchTodayTasks() {
+    const dateStr = todayStr();
+    const res = await fetchApi(`/api/week?date=${dateStr}`);
+    if (!res || !res.ok) return { items: [], date_str: dateStr, name: todayDayName() };
+    const data = await res.json();
+    const day = data.days.find(d => d.is_today) || data.days.find(d => d.name === todayDayName());
+    return { items: day ? day.items : [], date_str: day ? day.date_str : dateStr, name: todayDayName() };
+}
+
+async function loadBlocks() {
+    const [, today] = await Promise.all([fetchBlocksList(), fetchTodayTasks()]);
+    renderBlocksView(cachedBlocks, today);
+}
+
+async function renderCardBlockPills() {
+    const pillsEl = document.getElementById('wp-card-block-pills');
+    if (!pillsEl) return;
+    if (cachedBlocks.length === 0) await fetchBlocksList();
+    pillsEl.innerHTML = '';
+    cachedBlocks.forEach(b => {
+        const btn = document.createElement('button');
+        const isActive = activeCard && activeCard.block_id === b.id;
+        btn.className = 'wp-card-pill' + (isActive ? ' active' : '');
+        btn.innerHTML = `<img src="/static/icons/lego-brick.svg" class="icon-lego icon-lego-pill" alt=""> ${esc(b.name)}`;
+        btn.dataset.moveToBlock = b.id;
+        pillsEl.appendChild(btn);
+    });
+}
+
+function makeBlockTaskEl(task, blockId) {
+    const div = document.createElement('div');
+    div.className = 'wp-task-item' + (task.checked ? ' checked' : '');
+    div.dataset.taskId = task.id;
+    div.dataset.blockId = blockId;
+    div.dataset.text = task.text;
+    div.dataset.note = task.note || '';
+    div.dataset.color = task.color || '';
+    if (task.color && COLOR_MAP[task.color]) applyTaskColor(div, task.color, false);
+
+    const checkAttrs = task.checked ? 'checked' : '';
+    let badges = '';
+    if (task.note) badges += `<span class="wp-note-dot">&#183;</span>`;
+    div.innerHTML = `
+        <div class="wp-task-row">
+            <span class="wp-drag-handle">&#9776;</span>
+            <input type="checkbox" class="wp-task-check" ${checkAttrs}>
+            <span class="wp-task-text">${esc(task.text)}${badges}</span>
+        </div>`;
+
+    div.querySelector('.wp-task-check').addEventListener('change', async e => {
+        div.classList.toggle('checked', e.target.checked);
+        await fetchApi('/api/blocks/task/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ block_id: blockId, task_id: task.id, checked: e.target.checked }),
+        });
+    });
+
+    div.querySelector('.wp-task-text').addEventListener('click', () => {
+        openBlockCardPanel(task, blockId);
+    });
+
+    return div;
+}
+
+function renderTodayCard(today) {
+    const col = document.createElement('div');
+    col.className = 'block-col block-col-today' + (localStorage.getItem(TODAY_COLLAPSED_KEY) === '1' ? ' collapsed' : '');
+
+    col.innerHTML = `
+        <div class="block-header">
+            <span class="block-today-label">Today &middot; ${esc(today.name)}</span>
+            <span class="day-header-btns">
+                <button class="wp-day-eye block-eye" title="Hide/show">&#9900;</button>
+            </span>
+        </div>
+        <div class="block-tasks" data-kind="today" data-date="${today.date_str}" data-section="${today.name}"></div>
+        <div class="wp-task-add">
+            <input type="text" class="wp-add-input today-add-input" placeholder="+" autocomplete="off">
+        </div>
+    `;
+
+    col.querySelector('.block-eye').addEventListener('click', e => {
+        e.stopPropagation();
+        const nowCollapsed = !col.classList.contains('collapsed');
+        localStorage.setItem(TODAY_COLLAPSED_KEY, nowCollapsed ? '1' : '0');
+        col.classList.toggle('collapsed', nowCollapsed);
+    });
+
+    const tasksEl = col.querySelector('.block-tasks');
+    today.items.forEach(task => {
+        tasksEl.appendChild(makeTaskEl(task, today.date_str, today.name));
+    });
+
+    const addInput = col.querySelector('.today-add-input');
+    addInput.addEventListener('keyup', async e => {
+        if (e.key !== 'Enter') return;
+        const text = addInput.value.trim();
+        if (!text) return;
+        addInput.disabled = true;
+        await fetchApi('/api/week/task', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date: today.date_str, section: today.name, text }),
+        });
+        loadBlocks();
+        loadWeek(currentWeekMonday);
+    });
+
+    return col;
+}
+
+function renderBlocksView(blocks, today) {
+    const stack = document.getElementById('blk-stack');
+    stack.innerHTML = '';
+    const collapsed = getCollapsedBlocks();
+
+    stack.appendChild(renderTodayCard(today));
+
+    blocks.forEach(block => {
+        const col = document.createElement('div');
+        col.className = 'block-col' + (collapsed.includes(block.id) ? ' collapsed' : '');
+        col.dataset.blockId = block.id;
+
+        col.innerHTML = `
+            <div class="block-header">
+                <input type="text" class="block-name-input" value="${esc(block.name)}" autocomplete="off">
+                <span class="day-header-btns">
+                    <button class="wp-day-eye block-eye" title="Hide/show">&#9900;</button>
+                    <button class="block-delete-btn" title="Delete block">&#10005;</button>
+                </span>
+            </div>
+            <div class="block-tasks" id="block-tasks-${block.id}" data-kind="block" data-block-id="${block.id}"></div>
+            <div class="wp-task-add">
+                <input type="text" class="wp-add-input block-add-input" placeholder="+" autocomplete="off">
+            </div>
+        `;
+
+        const nameInput = col.querySelector('.block-name-input');
+        let nameOriginal = block.name;
+        async function saveBlockName() {
+            const val = nameInput.value.trim();
+            if (!val || val === nameOriginal) { nameInput.value = nameOriginal; return; }
+            nameOriginal = val;
+            await fetchApi('/api/blocks/rename', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ block_id: block.id, name: val }),
+            });
+        }
+        nameInput.addEventListener('blur', saveBlockName);
+        nameInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); nameInput.blur(); }
+        });
+
+        col.querySelector('.block-eye').addEventListener('click', e => {
+            e.stopPropagation();
+            const arr = getCollapsedBlocks();
+            const idx = arr.indexOf(block.id);
+            if (idx === -1) arr.push(block.id); else arr.splice(idx, 1);
+            setCollapsedBlocks(arr);
+            col.classList.toggle('collapsed', arr.includes(block.id));
+        });
+
+        col.querySelector('.block-delete-btn').addEventListener('click', e => {
+            e.stopPropagation();
+            pendingBlockDeleteId = block.id;
+            document.getElementById('wp-block-delete-modal').style.display = 'flex';
+        });
+
+        const tasksEl = col.querySelector('.block-tasks');
+        (block.linked_tasks || []).forEach(task => {
+            tasksEl.appendChild(makeTaskEl(task, task.date_str, task.section));
+        });
+        block.tasks.forEach(task => {
+            tasksEl.appendChild(makeBlockTaskEl(task, block.id));
+        });
+
+        const addInput = col.querySelector('.block-add-input');
+        addInput.addEventListener('keyup', async e => {
+            if (e.key !== 'Enter') return;
+            const text = addInput.value.trim();
+            if (!text) return;
+            addInput.disabled = true;
+            await fetchApi('/api/blocks/task', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ block_id: block.id, text }),
+            });
+            await loadBlocks();
+            const sameInput = document.querySelector(`.block-col[data-block-id="${block.id}"] .block-add-input`);
+            sameInput?.focus();
+        });
+
+        stack.appendChild(col);
+    });
+
+    initBlocksViewSortables();
+}
+
+function initBlocksViewSortables() {
+    if (typeof Sortable === 'undefined') return;
+    blockSortables.forEach(s => s.destroy());
+    blockSortables = [];
+
+    async function onBlocksViewSortEnd(evt) {
+        const fromEl = evt.from;
+        const toEl = evt.to;
+        const item = evt.item;
+        const toKind = toEl.dataset.kind; // 'today' | 'block'
+        const isOwn = item.dataset.taskId !== undefined; // own (block-only) task vs a real day task (linked or Today)
+
+        if (fromEl === toEl) {
+            if (isOwn) {
+                const orderedIds = Array.from(fromEl.querySelectorAll('.wp-task-item[data-task-id]')).map(el => el.dataset.taskId);
+                await fetchApi('/api/blocks/task/reorder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ block_id: fromEl.dataset.blockId, ordered: orderedIds }),
+                });
+                loadBlocks();
+            } else if (toKind === 'today') {
+                const orderedTexts = Array.from(fromEl.querySelectorAll('.wp-task-item')).filter(el => !el.dataset.taskId).map(el => el.dataset.text);
+                await fetchApi('/api/week/reorder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ date: fromEl.dataset.date, section: fromEl.dataset.section, ordered: orderedTexts }),
+                });
+                loadWeek(currentWeekMonday);
+            } else {
+                // Linked tasks inside a block don't have a persisted order yet — snap back.
+                loadBlocks();
+            }
+            return;
+        }
+
+        if (isOwn && toKind === 'block') {
+            await fetchApi('/api/blocks/task/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ from_block_id: fromEl.dataset.blockId, task_id: item.dataset.taskId, to_block_id: toEl.dataset.blockId }),
+            });
+            const dstIds = Array.from(toEl.querySelectorAll('.wp-task-item[data-task-id]')).map(el => el.dataset.taskId);
+            await fetchApi('/api/blocks/task/reorder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ block_id: toEl.dataset.blockId, ordered: dstIds }),
+            });
+            loadBlocks();
+        } else if (isOwn && toKind === 'today') {
+            await fetchApi('/api/blocks/task/send-to-day', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    block_id: fromEl.dataset.blockId, task_id: item.dataset.taskId,
+                    date: toEl.dataset.date, section: toEl.dataset.section,
+                }),
+            });
+            loadBlocks();
+            loadWeek(currentWeekMonday);
+        } else if (!isOwn && toKind === 'block') {
+            await fetchApi('/api/blocks/task/link', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    date: item.dataset.date, section: item.dataset.section,
+                    section_idx: parseInt(item.dataset.sectionIdx), block_id: toEl.dataset.blockId,
+                }),
+            });
+            loadBlocks();
+            loadWeek(currentWeekMonday);
+        } else if (!isOwn && toKind === 'today') {
+            await fetchApi('/api/blocks/task/unlink', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    date: item.dataset.date, section: item.dataset.section,
+                    section_idx: parseInt(item.dataset.sectionIdx),
+                }),
+            });
+            loadBlocks();
+            loadWeek(currentWeekMonday);
+        }
+    }
+
+    const isTouch = window.matchMedia('(pointer: coarse)').matches;
+    document.querySelectorAll('#blk-stack .block-tasks').forEach(list => {
+        const opts = {
+            group: 'blocks-view',
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            chosenClass: 'sortable-chosen',
+            delay: 200,
+            delayOnTouchOnly: true,
+            touchStartThreshold: 5,
+            filter: '.wp-recurring-item, .wp-task-sep',
+            onEnd: onBlocksViewSortEnd,
+        };
+        if (!isTouch) opts.handle = '.wp-drag-handle';
+        blockSortables.push(Sortable.create(list, opts));
+    });
+}
+
+document.getElementById('blk-add-block-btn').addEventListener('click', async () => {
+    await fetchApi('/api/blocks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+    });
+    loadBlocks();
+});
+
+document.getElementById('wp-block-delete-cancel').addEventListener('click', () => {
+    document.getElementById('wp-block-delete-modal').style.display = 'none';
+    pendingBlockDeleteId = null;
+});
+document.getElementById('wp-block-delete-confirm').addEventListener('click', async () => {
+    document.getElementById('wp-block-delete-modal').style.display = 'none';
+    if (!pendingBlockDeleteId) return;
+    await fetchApi('/api/blocks', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ block_id: pendingBlockDeleteId }),
+    });
+    pendingBlockDeleteId = null;
+    loadBlocks();
+});
+
+// ── Block task card panel ────────────────────────────────────────────────────
+
+function openBlockCardPanel(task, blockId) {
+    activeBlockCard = { blockId, taskId: task.id, color: task.color || null };
+
+    const titleEl = document.getElementById('wp-block-card-title');
+    titleEl.value = task.text;
+    blockCardTitleOriginal = task.text;
+
+    const notesEl = document.getElementById('wp-block-card-notes');
+    notesEl.value = task.note || '';
+    blockCardNoteOriginal = task.note || '';
+    autoResizeCard(notesEl);
+
+    renderBlockColorSwatches();
+    document.getElementById('wp-block-card-panel').style.display = 'block';
+}
+
+async function saveBlockCardTitle() {
+    if (!activeBlockCard) return;
+    const newText = document.getElementById('wp-block-card-title').value.trim();
+    if (!newText || newText === blockCardTitleOriginal) return;
+    blockCardTitleOriginal = newText;
+    await fetchApi('/api/blocks/task/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ block_id: activeBlockCard.blockId, task_id: activeBlockCard.taskId, text: newText }),
+    });
+}
+
+async function saveBlockCardNote() {
+    if (!activeBlockCard) return;
+    const newNote = document.getElementById('wp-block-card-notes').value.trim();
+    if (newNote === blockCardNoteOriginal) return;
+    blockCardNoteOriginal = newNote;
+    await fetchApi('/api/blocks/task/note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ block_id: activeBlockCard.blockId, task_id: activeBlockCard.taskId, note: newNote }),
+    });
+}
+
+async function saveBlockCardChanges() {
+    await saveBlockCardNote();
+    await saveBlockCardTitle();
+}
+
+async function closeBlockCardPanel() {
+    await saveBlockCardChanges();
+    document.getElementById('wp-block-card-panel').style.display = 'none';
+    activeBlockCard = null;
+    blockCardNoteOriginal = '';
+    blockCardTitleOriginal = '';
+}
+
+function renderBlockColorSwatches() {
+    const container = document.getElementById('wp-block-card-color-swatches');
+    container.innerHTML = '';
+    const clearSwatch = document.createElement('div');
+    clearSwatch.className = 'wp-card-color-swatch wp-color-clear' + (!activeBlockCard.color ? ' active' : '');
+    clearSwatch.title = 'None';
+    clearSwatch.addEventListener('click', async () => {
+        await saveBlockCardChanges();
+        await fetchApi('/api/blocks/task/color', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ block_id: activeBlockCard.blockId, task_id: activeBlockCard.taskId, color: '' }),
+        });
+        activeBlockCard.color = null;
+        await loadBlocks();
+    });
+    container.appendChild(clearSwatch);
+    Object.entries(COLOR_MAP).forEach(([name, hex]) => {
+        const swatch = document.createElement('div');
+        swatch.className = 'wp-card-color-swatch' + (activeBlockCard.color === name ? ' active' : '');
+        swatch.style.background = hex;
+        swatch.title = name;
+        swatch.addEventListener('click', async () => {
+            await saveBlockCardChanges();
+            await fetchApi('/api/blocks/task/color', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ block_id: activeBlockCard.blockId, task_id: activeBlockCard.taskId, color: name }),
+            });
+            activeBlockCard.color = name;
+            await loadBlocks();
+        });
+        container.appendChild(swatch);
+    });
+}
+
+document.getElementById('wp-block-card-notes').addEventListener('input', function () { autoResizeCard(this); });
+document.getElementById('wp-block-card-notes').addEventListener('blur', saveBlockCardNote);
+document.getElementById('wp-block-card-title').addEventListener('blur', saveBlockCardTitle);
+document.getElementById('wp-block-card-title').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('wp-block-card-title').blur(); }
+});
+document.getElementById('wp-block-card-close').addEventListener('click', closeBlockCardPanel);
+
+document.getElementById('wp-block-send-today').addEventListener('click', async () => {
+    if (!activeBlockCard) return;
+    await saveBlockCardChanges();
+    const { blockId, taskId } = activeBlockCard;
+    closeBlockCardPanel();
+    await fetchApi('/api/blocks/task/send-to-day', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ block_id: blockId, task_id: taskId, date: todayStr(), section: todayDayName() }),
+    });
+    loadBlocks();
+    loadWeek(currentWeekMonday);
+});
+
+document.getElementById('wp-block-move-btn').addEventListener('click', async () => {
+    if (!activeBlockCard) return;
+    await saveBlockCardChanges();
+    const { blockId, taskId } = activeBlockCard;
+    const section = document.getElementById('wp-block-move-section').value;
+    closeBlockCardPanel();
+    await fetchApi('/api/blocks/task/send-to-day', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ block_id: blockId, task_id: taskId, date: todayStr(), section }),
+    });
+    loadBlocks();
+    loadWeek(currentWeekMonday);
+});
+
+document.getElementById('wp-block-card-delete').addEventListener('click', async () => {
+    if (!activeBlockCard) return;
+    const { blockId, taskId } = activeBlockCard;
+    closeBlockCardPanel();
+    await fetchApi('/api/blocks/task', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ block_id: blockId, task_id: taskId }),
+    });
+    loadBlocks();
+});
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && activeBlockCard) closeBlockCardPanel();
+});
+document.addEventListener('click', e => {
+    if (activeBlockCard &&
+        !e.target.closest('#wp-block-card-panel') &&
+        !e.target.closest('.wp-task-text')) {
+        closeBlockCardPanel();
+    }
+});
+
+if (localStorage.getItem(ACTIVE_VIEW_KEY) === 'block') {
+    openBlocksView();
+}
 </script>
 {% endblock %}

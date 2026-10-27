@@ -18,6 +18,13 @@ from daemons.weekplan import (
     list_recurring_tasks, add_recurring_task, delete_all_recurring,
     import_calendar_csv, list_imported_tasks, delete_imported_task,
 )
+from daemons.blocks import (
+    init_blocks_db,
+    list_blocks, add_block, rename_block, delete_block,
+    add_block_task, toggle_block_task, rename_block_task, set_block_task_note,
+    set_block_task_color, delete_block_task, reorder_block_tasks, move_block_task,
+    link_task_to_block, unlink_task_from_block, send_block_task_to_day,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,6 +41,7 @@ app.secret_key = config.SECRET_KEY
 app.permanent_session_lifetime = timedelta(days=30)
 
 init_db()
+init_blocks_db()
 
 
 def _set_network_cookie(response):
@@ -444,6 +452,211 @@ def api_step_count():
     result = set_step_count(date_str, section, int(section_idx), int(count))
     if "error" in result:
         return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/blocks", methods=["GET"])
+@login_required
+def api_blocks_list():
+    return jsonify(list_blocks())
+
+
+@app.route("/api/blocks", methods=["POST"])
+@login_required
+def api_blocks_add():
+    data = request.get_json() or {}
+    result = add_block(data.get("name"))
+    return jsonify(result)
+
+
+@app.route("/api/blocks/rename", methods=["POST"])
+@login_required
+def api_blocks_rename():
+    data = request.get_json() or {}
+    block_id = data.get("block_id", "")
+    name = data.get("name", "")
+    if not block_id or not name:
+        return jsonify({"error": "block_id, name required"}), 400
+    result = rename_block(block_id, name)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/blocks", methods=["DELETE"])
+@login_required
+def api_blocks_delete():
+    data = request.get_json() or {}
+    block_id = data.get("block_id", "")
+    if not block_id:
+        return jsonify({"error": "block_id required"}), 400
+    result = delete_block(block_id)
+    return jsonify(result)
+
+
+@app.route("/api/blocks/task", methods=["POST"])
+@login_required
+def api_block_task_add():
+    data = request.get_json() or {}
+    block_id = data.get("block_id", "")
+    text = data.get("text", "")
+    note = data.get("note") or None
+    color = data.get("color") or None
+    if not block_id or not text:
+        return jsonify({"error": "block_id, text required"}), 400
+    result = add_block_task(block_id, text, note, color)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/blocks/task/toggle", methods=["POST"])
+@login_required
+def api_block_task_toggle():
+    data = request.get_json() or {}
+    block_id = data.get("block_id", "")
+    task_id = data.get("task_id", "")
+    checked = data.get("checked")
+    if not block_id or not task_id or checked is None:
+        return jsonify({"error": "block_id, task_id, checked required"}), 400
+    result = toggle_block_task(block_id, task_id, bool(checked))
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/blocks/task/rename", methods=["POST"])
+@login_required
+def api_block_task_rename():
+    data = request.get_json() or {}
+    block_id = data.get("block_id", "")
+    task_id = data.get("task_id", "")
+    text = data.get("text", "")
+    if not block_id or not task_id:
+        return jsonify({"error": "block_id, task_id required"}), 400
+    result = rename_block_task(block_id, task_id, text)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/blocks/task/note", methods=["POST"])
+@login_required
+def api_block_task_note():
+    data = request.get_json() or {}
+    block_id = data.get("block_id", "")
+    task_id = data.get("task_id", "")
+    note = data.get("note", "")
+    if not block_id or not task_id:
+        return jsonify({"error": "block_id, task_id required"}), 400
+    result = set_block_task_note(block_id, task_id, note)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/blocks/task/color", methods=["POST"])
+@login_required
+def api_block_task_color():
+    data = request.get_json() or {}
+    block_id = data.get("block_id", "")
+    task_id = data.get("task_id", "")
+    color = data.get("color", "")
+    if not block_id or not task_id:
+        return jsonify({"error": "block_id, task_id required"}), 400
+    result = set_block_task_color(block_id, task_id, color)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/blocks/task", methods=["DELETE"])
+@login_required
+def api_block_task_delete():
+    data = request.get_json() or {}
+    block_id = data.get("block_id", "")
+    task_id = data.get("task_id", "")
+    if not block_id or not task_id:
+        return jsonify({"error": "block_id, task_id required"}), 400
+    result = delete_block_task(block_id, task_id)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/blocks/task/reorder", methods=["POST"])
+@login_required
+def api_block_task_reorder():
+    data = request.get_json() or {}
+    block_id = data.get("block_id", "")
+    ordered = data.get("ordered", [])
+    if not block_id:
+        return jsonify({"error": "block_id required"}), 400
+    result = reorder_block_tasks(block_id, ordered)
+    return jsonify(result)
+
+
+@app.route("/api/blocks/task/move", methods=["POST"])
+@login_required
+def api_block_task_move():
+    data = request.get_json() or {}
+    from_block_id = data.get("from_block_id", "")
+    task_id = data.get("task_id", "")
+    to_block_id = data.get("to_block_id", "")
+    if not from_block_id or not task_id or not to_block_id:
+        return jsonify({"error": "from_block_id, task_id, to_block_id required"}), 400
+    result = move_block_task(from_block_id, task_id, to_block_id)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/blocks/task/link", methods=["POST"])
+@login_required
+def api_block_task_link():
+    data = request.get_json() or {}
+    date_str = data.get("date", "")
+    section = data.get("section", "")
+    section_idx = data.get("section_idx")
+    block_id = data.get("block_id", "")
+    if not date_str or not section or section_idx is None or not block_id:
+        return jsonify({"error": "date, section, section_idx, block_id required"}), 400
+    result = link_task_to_block(date_str, section, int(section_idx), block_id)
+    if "error" in result:
+        return jsonify(result), 400
+    logger.info(f"Task linked to block: [{section}] idx {section_idx} -> block {block_id}")
+    return jsonify(result)
+
+
+@app.route("/api/blocks/task/unlink", methods=["POST"])
+@login_required
+def api_block_task_unlink():
+    data = request.get_json() or {}
+    date_str = data.get("date", "")
+    section = data.get("section", "")
+    section_idx = data.get("section_idx")
+    if not date_str or not section or section_idx is None:
+        return jsonify({"error": "date, section, section_idx required"}), 400
+    result = unlink_task_from_block(date_str, section, int(section_idx))
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/blocks/task/send-to-day", methods=["POST"])
+@login_required
+def api_block_task_send_to_day():
+    data = request.get_json() or {}
+    block_id = data.get("block_id", "")
+    task_id = data.get("task_id", "")
+    date_str = data.get("date", "")
+    section = data.get("section", "")
+    if not block_id or not task_id or not date_str or not section:
+        return jsonify({"error": "block_id, task_id, date, section required"}), 400
+    result = send_block_task_to_day(block_id, task_id, date_str, section)
+    if "error" in result:
+        return jsonify(result), 400
+    logger.info(f"Block task sent to day: block {block_id} -> [{section}]")
     return jsonify(result)
 
 

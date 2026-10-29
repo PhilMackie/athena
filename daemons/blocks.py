@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta
 
 from daemons.weekplan import (
     get_db, add_task, set_task_color, set_task_block,
-    DAY_NAMES, SOMEDAY_WEEK, _get_monday,
+    DAY_NAMES, SOMEDAY_WEEK, _get_monday, _normalize_positions,
 )
 
 
@@ -122,6 +122,7 @@ def list_blocks() -> list:
                         "note": t["note"],
                         "color": t["color"],
                         "position": t["position"],
+                        "created_at": t["created_at"],
                     }
                     for t in own_tasks
                 ],
@@ -347,3 +348,66 @@ def send_block_task_to_day(block_id: str, task_id: str, date_str: str, section: 
     if color:
         set_task_color(date_str, section, section_idx, color)
     return {"status": "saved"}
+
+
+def reset_stale_tasks() -> dict:
+    """Sweep leftover block work from a previous day. Checked leftovers are
+    discarded (own tasks deleted, linked tasks just unlinked); unchecked ones
+    are filed onto yesterday's day column so nothing worked on is lost, then
+    today's blocks start clean."""
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    yesterday_str = yesterday.isoformat()
+    target_monday = _get_monday(yesterday_str)
+    target_section = DAY_NAMES[yesterday.weekday()]
+
+    with get_db() as conn:
+        stale_own = conn.execute(
+            "SELECT * FROM time_block_tasks WHERE created_at < ?", (today.isoformat(),)
+        ).fetchall()
+        stale_linked = [
+            r for r in conn.execute(
+                "SELECT * FROM tasks WHERE block_id IS NOT NULL"
+            ).fetchall()
+            if date.fromisoformat(_task_date_str(r["week_monday"], r["section"])) < today
+        ]
+
+    moved, deleted, unlinked = 0, 0, 0
+
+    for row in stale_own:
+        with get_db() as conn:
+            conn.execute("DELETE FROM time_block_tasks WHERE id=?", (row["id"],))
+            _normalize_block_positions(conn, row["block_id"])
+        if row["checked"]:
+            deleted += 1
+            continue
+        add_task(yesterday_str, target_section, row["text"], note=row["note"])
+        if row["color"]:
+            with get_db() as conn:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM tasks WHERE week_monday=? AND section=?",
+                    (target_monday, target_section),
+                ).fetchone()[0]
+            set_task_color(yesterday_str, target_section, count - 1, row["color"])
+        moved += 1
+
+    for row in stale_linked:
+        if row["checked"]:
+            with get_db() as conn:
+                conn.execute("UPDATE tasks SET block_id=NULL WHERE id=?", (row["id"],))
+            unlinked += 1
+            continue
+        with get_db() as conn:
+            max_pos = conn.execute(
+                "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE week_monday=? AND section=?",
+                (target_monday, target_section),
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE tasks SET week_monday=?, section=?, position=?, block_id=NULL WHERE id=?",
+                (target_monday, target_section, max_pos + 1, row["id"]),
+            )
+            _normalize_positions(conn, row["week_monday"], row["section"])
+            _normalize_positions(conn, target_monday, target_section)
+        moved += 1
+
+    return {"status": "done", "moved": moved, "deleted": deleted, "unlinked": unlinked}

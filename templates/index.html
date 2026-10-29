@@ -211,6 +211,20 @@
     </div>
 </div>
 
+<!-- Stale blocks reset prompt -->
+<div class="wp-modal-overlay" id="wp-blocks-reset-modal" style="display:none">
+    <div class="wp-modal-box">
+        <div class="wp-modal-title">Leftover work from yesterday</div>
+        <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:14px" id="wp-blocks-reset-msg">
+            Some tasks in your blocks are from a previous day.
+        </div>
+        <div class="wp-modal-actions">
+            <button class="wp-modal-btn wp-modal-cancel" id="wp-blocks-reset-keep">Keep for now</button>
+            <button class="wp-modal-btn wp-modal-confirm" id="wp-blocks-reset-confirm">Reset</button>
+        </div>
+    </div>
+</div>
+
 <!-- Recurring delete modal -->
 <div class="wp-modal-overlay" id="wp-recur-delete-modal" style="display:none">
     <div class="wp-modal-box">
@@ -1998,6 +2012,30 @@ async function fetchTodayTasks() {
 async function loadBlocks() {
     const [, today] = await Promise.all([fetchBlocksList(), fetchTodayTasks()]);
     renderBlocksView(cachedBlocks, today);
+    if (document.getElementById('blocks-modal').classList.contains('open')) {
+        maybePromptBlocksReset(cachedBlocks);
+    }
+}
+
+const BLOCKS_RESET_DISMISSED_KEY = 'athena-blocks-reset-dismissed';
+
+function countStaleBlockItems(blocks) {
+    const todayStrVal = todayStr();
+    let count = 0;
+    blocks.forEach(b => {
+        b.tasks.forEach(t => { if (t.created_at && t.created_at.slice(0, 10) < todayStrVal) count++; });
+        b.linked_tasks.forEach(t => { if (t.date_str < todayStrVal) count++; });
+    });
+    return count;
+}
+
+function maybePromptBlocksReset(blocks) {
+    const count = countStaleBlockItems(blocks);
+    if (count === 0) return;
+    if (localStorage.getItem(BLOCKS_RESET_DISMISSED_KEY) === todayStr()) return;
+    document.getElementById('wp-blocks-reset-msg').textContent =
+        `${count} task${count === 1 ? '' : 's'} in your blocks ${count === 1 ? 'is' : 'are'} from a previous day. Move unfinished ones to yesterday and clear the rest?`;
+    document.getElementById('wp-blocks-reset-modal').style.display = 'flex';
 }
 
 async function renderCardBlockPills() {
@@ -2312,6 +2350,17 @@ document.getElementById('wp-block-delete-confirm').addEventListener('click', asy
     });
     pendingBlockDeleteId = null;
     loadBlocks();
+});
+
+document.getElementById('wp-blocks-reset-keep').addEventListener('click', () => {
+    localStorage.setItem(BLOCKS_RESET_DISMISSED_KEY, todayStr());
+    document.getElementById('wp-blocks-reset-modal').style.display = 'none';
+});
+document.getElementById('wp-blocks-reset-confirm').addEventListener('click', async () => {
+    document.getElementById('wp-blocks-reset-modal').style.display = 'none';
+    await fetchApi('/api/blocks/reset-stale', { method: 'POST' });
+    localStorage.removeItem(BLOCKS_RESET_DISMISSED_KEY);
+    await loadBlocks();
 });
 
 // ── Block task card panel ────────────────────────────────────────────────────

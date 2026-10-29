@@ -4,16 +4,18 @@ Weekly planner — 7-column grid with Someday backlog. Flask service on port 500
 
 **Phil's Notes:** `/home/phil/Documents/philVault/dev/Athena/`
 
-## ⚠️ Vault Reorg (2026-08-25) — read this first
+## Vault Reorg (2026-08-25)
 
 Phil restructured `philVault/` from ~14 sprawling top-level folders into 6 categories: `work/`, `dev/`, `creative/`, `life/`, `trading/`, `gaming/` — each with its own `projects/` and `journal/` subfolder. Athena's own notes moved from `Projects/Athena/` to `dev/Athena/`. Quanta (duo-brain) lives at `dev/Quanta/` now (was `Projects/Quanta/`).
 
-**This broke `config.py`'s `TEMPLATES_DIR`** (line 23) — it's still hardcoded to the old `OBSIDIAN_VAULT / "Projects" / "Quanta" / "Templates"` path. The real path is now `OBSIDIAN_VAULT / "dev" / "Quanta" / "Templates"`. Until this is fixed, `WeeklyRecurring.md` (the ghost-indicator recurring tasks shown in every day column, see "Storage" below) can't be read. Tracked in `todo.md` under Active — see duo-brain's `config.py`/`daemons/goals.py`/`daemons/projects.py` for the equivalent fix already applied there as a reference.
+`config.py`'s `TEMPLATES_DIR` was updated to `OBSIDIAN_VAULT / "dev" / "Quanta" / "Templates"` and deployed — fixed in both dev and prod. Note: the original `WeeklyRecurring.md` was found deleted (not just moved) during the reorg and was recreated as an empty placeholder at the new path.
 
 Full migration plan/rationale: `philVault/dev/Quanta/vault-reorg-plan.md`.
 
 ## Deployment Rules
-**Never deploy to the Pi without Phil explicitly saying so.** Do not run deploy scripts, rsync to `duobrain.local`, SSH to `pi@duobrain.local`, or restart services via `systemctl`. Always describe what you want to deploy and wait for confirmation. A global hook will block these commands regardless.
+**Never deploy to the Pi without Phil explicitly saying so.** Do not run deploy scripts, rsync to `duobrain.local`, SSH to `pi@duobrain.local`, or restart services via `systemctl`. Always describe what you want to deploy and wait for confirmation. Enforced by `.claude/settings.json`'s `PreToolUse`/`Bash` hook (`guard_deploy_hook.sh`, shared from duo-brain), which forces a fresh confirmation on any deploy-shaped command regardless of what's pre-approved in `settings.local.json`.
+
+⚠️ **Ecosystem governance applies here too** — this project is locked to its own root: no agent (including Quanta/Overlord) may edit files outside `~/Dev/Claude/athena/`, vault docs included. Full rules + enforcement status: `philVault/dev/Ecosystem-Governance.md`. Added 2026-09-13.
 
 - DEV: `python3 app.py` → `http://localhost:5002`
 - PROD: Pi at `duobrain.local` — deploy only on explicit instruction

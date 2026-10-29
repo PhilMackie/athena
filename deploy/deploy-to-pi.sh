@@ -11,7 +11,7 @@ APP_DEST="/opt/athena/app"
 echo "=== Deploying Athena to $PI_HOST ==="
 
 echo "Creating remote directories..."
-ssh "$PI_HOST" "sudo mkdir -p /opt/athena && sudo chown pi:pi /opt/athena && mkdir -p /opt/athena/app /opt/athena/logs"
+ssh -t "$PI_HOST" "sudo mkdir -p /opt/athena && sudo chown pi:pi /opt/athena && mkdir -p /opt/athena/app /opt/athena/logs"
 
 echo "Syncing application files..."
 rsync -avz --progress \
@@ -30,9 +30,9 @@ if ssh "$PI_HOST" "test -f /opt/athena/venv/bin/pip"; then
     echo "Installing dependencies..."
     ssh "$PI_HOST" "/opt/athena/venv/bin/pip install -q -r $APP_DEST/requirements.txt"
     echo "Restarting service..."
-    ssh "$PI_HOST" "sudo systemctl restart athena"
+    ssh -t "$PI_HOST" "sudo systemctl restart athena"
     echo ""
-    ssh "$PI_HOST" "sudo systemctl status athena --no-pager | head -20"
+    ssh -t "$PI_HOST" "sudo systemctl status athena --no-pager | head -20"
 else
     echo ""
     echo "Venv not set up yet. SSH in and run:"
@@ -41,4 +41,4 @@ fi
 
 echo ""
 echo "=== Done ==="
-ssh "$PI_HOST" "sudo systemctl status athena --no-pager | head -20"
+ssh -t "$PI_HOST" "sudo systemctl status athena --no-pager | head -20"

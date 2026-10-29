@@ -24,6 +24,7 @@ from daemons.blocks import (
     add_block_task, toggle_block_task, rename_block_task, set_block_task_note,
     set_block_task_color, delete_block_task, reorder_block_tasks, move_block_task,
     link_task_to_block, unlink_task_from_block, send_block_task_to_day,
+    reset_stale_tasks,
 )
 
 logging.basicConfig(
@@ -657,6 +658,16 @@ def api_block_task_send_to_day():
     if "error" in result:
         return jsonify(result), 400
     logger.info(f"Block task sent to day: block {block_id} -> [{section}]")
+    return jsonify(result)
+
+
+@app.route("/api/blocks/reset-stale", methods=["POST"])
+@login_required
+def api_blocks_reset_stale():
+    result = reset_stale_tasks()
+    logger.info(
+        f"Blocks reset: moved={result.get('moved')} deleted={result.get('deleted')} unlinked={result.get('unlinked')}"
+    )
     return jsonify(result)
 
 

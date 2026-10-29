@@ -16,3 +16,6 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code local overrides — never commit (may contain hosts/creds)
+.claude/settings.local.json

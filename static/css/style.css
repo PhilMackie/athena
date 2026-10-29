@@ -1568,6 +1568,9 @@ input[type="text"]:focus {
     flex-direction: column;
     overflow: hidden;
 }
+
+/* Sits above #blocks-modal (also z-index 2000) when shown while Block view is open */
+#wp-blocks-reset-modal { z-index: 2001; }
 #blocks-modal.open { display: flex; }
 
 .blk-modal-header {

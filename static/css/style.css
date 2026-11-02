@@ -529,6 +529,18 @@ input[type="text"]:focus {
     vertical-align: middle;
 }
 
+.wp-op-badge {
+    font-size: 0.5rem;
+    color: var(--accent);
+    opacity: 0.85;
+    margin-right: 1px;
+    vertical-align: super;
+}
+
+/* A task filed into an Operation — always visible, just marked */
+.wp-task-item.op-tagged { border-left: 2px solid rgba(185, 103, 255, 0.55); }
+@media (max-width: 819px) { .wp-task-item.op-tagged { border-left-width: 3px; } }
+
 /* Global recurring items */
 .wp-recurring-item {
     display: flex;
@@ -1835,25 +1847,6 @@ input[type="text"]:focus {
 
 .day-op-bar-day { color: var(--text-secondary); flex-shrink: 0; }
 
-/* "+ N tasks + recurring hidden" / "back to Operation only" toggle */
-.day-op-reveal {
-    display: block;
-    width: calc(100% - 8px);
-    margin: 4px;
-    padding: 3px 5px;
-    background: transparent;
-    border: 1px dashed #2a2135;
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-    font-size: 0.5625rem;
-    letter-spacing: 0.08em;
-    text-align: left;
-    cursor: pointer;
-    transition: border-color 0.15s, color 0.15s;
-}
-.day-op-reveal:hover { border-color: var(--accent); color: var(--accent); }
-.day-op-reveal.revealed { border-style: solid; border-color: rgba(185, 103, 255, 0.4); }
-
 .wp-op-pill-icon { font-size: 0.5rem; color: var(--accent); }
 
 @media (max-width: 819px) {
@@ -1862,7 +1855,6 @@ input[type="text"]:focus {
         background: transparent;
     }
     .day-op-bar { margin: 0 8px; }
-    .day-op-reveal { width: calc(100% - 16px); margin: 4px 8px; }
 }
 
 /* ── Operations manager modal ───────────────────────────────────────────── */

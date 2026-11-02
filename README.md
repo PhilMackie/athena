@@ -18,6 +18,7 @@ A weekly planner with a 7-column task grid and Someday backlog. Built with Flask
 - **Hide done** — toggle button (desktop) or shake (mobile) to hide completed tasks
 - **Enter → next column** — hitting Enter in an add input moves focus to the next day's input
 - **Global recurring tasks** — loaded from `WeeklyRecurring.md`, shown in every column as read-only
+- **Operations** — name a date range to focus on; covered day columns mute recurring/untagged tasks down to just what's tagged in, with a scrolling marquee banner. Each Operation also carries its own persistent "Mission Objectives" checklist, independent of the week grid
 - **PIN authentication** with lockout after failed attempts, 30-day session
 - **SQLite storage** — tasks stored in `data/athena.db` with UUIDs and timestamps
 - **Responsive** — flat list layout on mobile

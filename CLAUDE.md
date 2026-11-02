@@ -84,6 +84,17 @@ no FK/cascade — `delete_operation()` clears it manually, so the tasks survive 
 simply stop being Operation work. Only dated day tasks can be tagged: Scratchpad and
 Someday have no calendar date, so no Operation can ever cover them.
 
+An Operation also owns a flat **Mission Objectives** checklist — date-independent,
+unlike everything else tagged/linked elsewhere in this app:
+
+```sql
+operation_tasks (id, operation_id, position, text, checked, created_at, completed_at)
+```
+
+Unlike `tasks.operation_id`, this one *is* a real FK with `ON DELETE CASCADE`
+(mirroring `time_block_tasks -> time_blocks`) — an objective has no meaning once
+its Operation is gone, so `delete_operation()` doesn't need to clean it up by hand.
+
 A block holds two kinds of tasks: "own" tasks (live only in `time_block_tasks`, no day
 of their own) and "linked" tasks (a real `tasks` row tagged via `tasks.block_id` — stays
 on its day, just also surfaces inside the block). `tasks.block_id` has no FK/cascade;
@@ -130,6 +141,11 @@ on its day, just also surfaces inside the block). `tasks.block_id` has no FK/cas
 | POST | `/api/operations/rename` | Rename an Operation |
 | POST | `/api/operations/dates` | Re-range an Operation (untags days it no longer covers) |
 | DELETE | `/api/operations` | Delete an Operation (clears `operation_id` on its tasks) |
+| POST | `/api/operations/objective` | Add a mission objective to an Operation |
+| POST | `/api/operations/objective/toggle` | Check/uncheck a mission objective |
+| POST | `/api/operations/objective/rename` | Rename a mission objective |
+| DELETE | `/api/operations/objective` | Delete a mission objective |
+| POST | `/api/operations/objective/reorder` | Reorder an Operation's objectives |
 
 ## UI — Key Patterns
 
@@ -168,33 +184,36 @@ filed onto **yesterday's** day column (own tasks via `add_task`, linked tasks re
 and unlinked); checked leftovers are discarded — own tasks deleted outright, linked
 tasks just unlinked in place since they're real, already-correctly-dated history.
 
-### Operations — Tunnel Vision
+### Operations
 An Operation is a name plus a contiguous, inclusive date range. Launch/manage them
 from the `◎` header button (`#operations-modal`, `z-index: 2001`).
 
-While an Operation covers a day column, that column drops into **tunnel vision**:
-the global `WeeklyRecurring` ghosts, every task with a `recur` cadence, and every
-untagged one-off are hidden, leaving only the tasks tagged with that
-`operation_id`.
-
-**Hiding is render-time only.** `get_or_create_week` returns the *whole* week as
-always — `renderWeek` does the filtering. This matters because `section_idx` is a
-task's position in the full section list; filtering server-side would shift every
-index and break toggle/delete/rename. `reorder_section` is index-free (it matches
-on text and renormalizes), so a partial ordered list from a filtered column is
-tolerated rather than destructive.
+While an Operation covers a day column, that column mutes the global
+`WeeklyRecurring` ghosts and gets an accent border + a `NAME 2/4` day-count bar
+(`.day-op-bar`). **It does not hide anything else.** An earlier version hid every
+untagged task too ("tunnel vision") — reverted 2026-11-01 after real use showed a
+multi-day Operation was wiping out someone's whole regular action-item list for
+the entire span, not just muting low-value noise. A task tagged into the
+Operation (`tasks.operation_id`) is marked rather than isolated: a ◆ badge in
+`makeTaskEl`'s badge row plus a `.op-tagged` left-border accent on the row. If
+tunnel vision (or something like it) comes back, it needs to default to
+*showing* everything and require an opt-in to narrow, not the other way round.
 
 Supporting pieces:
-- `opRevealed` — a module-level `Set` of dates temporarily taken out of tunnel
-  vision via the `+ N tasks + recurring hidden` chip. Session-only by design, so
-  focus resets on reload. Re-renders from `lastWeekData`, no refetch.
-- Tasks typed into an Operation day's `+` input are auto-tagged — otherwise they'd
-  vanish behind the filter the instant they were created. Same for a cross-column
-  drag: the tag follows the destination day (dragging out drops it).
+- Tasks typed into an Operation day's `+` input, or dragged into one, auto-tag
+  into the Operation (`operationIdForDate`); dragging out drops the tag. This
+  survived the tunnel-vision revert on purpose — harmless now that tagging is
+  purely cosmetic (badge + `task_count`), and it's the kind of default someone
+  running a multi-day Operation would likely want. Deliberately *not* matched
+  to how Time Blocks works (no auto-link there) — revisit if that inconsistency
+  becomes confusing in practice.
 - `defer_task` and `set_operation_dates` clear `operation_id` when the task's new
   date falls outside the range — a tag only means anything on a covered date.
 - Card panel shows an Operation pill row, but only for Operations that actually
-  cover that task's day.
+  cover that task's day. `makeTaskEl`'s click handler must pass `operation_id`
+  through to `openCardPanel` explicitly (it's not derived from anything else on
+  the element) — this was missing for one revision, silently making every card
+  panel show "Not in Operation" regardless of actual tag state.
 
 ### Operation Marquee
 A scrolling alert band (`#wp-op-marquee`) sits between the page header and the week
@@ -206,6 +225,26 @@ duplicates it so the `translateX(-50%)` keyframe loops seamlessly; duration is s
 from the measured half-width so speed stays constant regardless of name length.
 It re-measures on `resize`, and `prefers-reduced-motion` keeps the band but drops
 the scroll.
+
+### Mission Objectives
+Each Operation owns a flat checklist (`operation_tasks`) with no date, no section,
+no day column — it exists from launch to deletion regardless of which week is on
+screen, unlike a tagged day task (date-bound) or Scratchpad (week-bound). Two
+surfaces share the same markup/listener code (`objectivesListHtml()` +
+`wireObjectiveListeners()`):
+
+- **Week view** — `#wp-op-objectives`, a collapsible "Mission Objectives — &lt;name&gt;"
+  group per Operation covering the week on screen, rendered by
+  `renderOpObjectivesPanel()` right after `renderOpMarquee()` in `renderWeek`.
+  Collapse state is per-Operation in `localStorage['athena-op-objectives-collapsed']`.
+- **Operations modal** — an expand toggle (`▸`) per row reveals the same checklist
+  inline, reachable regardless of which week is in view (e.g. to stock objectives
+  before the Operation's range even starts).
+
+Both call `refreshOperationsEverywhere()` after any add/toggle/rename/delete, which
+re-fetches `/api/operations` and re-renders whichever of the two surfaces is
+currently open — a full rebuild, not a DOM patch, matching how blocks/recurring/
+birthdays already refresh themselves elsewhere in this file.
 
 ## Carry-Forward Logic
 
@@ -233,6 +272,6 @@ Logs: `/opt/athena/logs/`
 - Someday container needs `data-date` and `data-section` set before SortableJS init
 - `migrate.py` must be run from `/opt/athena/app/` on the Pi so `config` is importable
 - `import_calendar_csv`: `csv.DictReader` gives short rows `None` (not `""`) for missing trailing columns, and unquoted commas inside the last column spill into `row[None]` (restkey) instead of staying in that field — both handled defensively, but a reminder that hand-built "Google Calendar CSV" exports are rarely well-formed
-- Operations deliberately hide tasks rather than move or delete them — if a task "disappears", check whether its day is covered by an Operation before hunting for a data bug. The `+ N hidden` chip on the column is the escape hatch
+- Operations no longer hide real tasks (see "Operations" above) — only the `WeeklyRecurring` ghosts mute on a covered day. If a task looks genuinely missing, that's a data bug, not Operation filtering
 - Two Operations may overlap; the first by `start_date, created_at` wins a contested day (`op_id_by_date.setdefault`)
 - Any new full-screen modal shown *while `#blocks-modal` is open* needs an explicit `z-index` above 2000 — `#blocks-modal` and the generic `.wp-modal-overlay` class both sit at `z-index: 2000`, and at a tie `#blocks-modal` (later in the DOM) paints over the other modal even though `style.display` is correctly `flex`. `#wp-blocks-reset-modal` sets `z-index: 2001` for this reason.

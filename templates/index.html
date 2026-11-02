@@ -483,11 +483,12 @@ let cardTitleOriginal = '';
 let somedaySortable = null;
 let scratchpadSortable = null;
 
-// Operations: tunnel-vision focus modes pinned to a date range.
+// Operations: named, date-ranged focus modes. Day columns they cover mute the
+// global recurring ghosts and get an accent treatment; real tasks always stay
+// visible, with Operation-tagged ones marked rather than isolated.
 let lastWeekData = null;          // last week payload, for re-render without refetch
 let cachedOperations = [];        // Operations manager list
 let opById = {};                  // id -> operation, for the week on screen
-const opRevealed = new Set();     // dates temporarily taken out of tunnel vision
 
 const COLLAPSED_KEY = 'athena-collapsed-days';
 const SOMEDAY_COLLAPSED_KEY = 'athena-someday-collapsed';
@@ -622,13 +623,9 @@ function renderWeek(data) {
 
     data.days.forEach(day => {
         const op = day.operation_id ? opById[day.operation_id] : null;
-        // Tunnel vision: an Operation day shows only the tasks filed into it,
-        // unless this day has been temporarily revealed.
-        const tunnel = !!op && !opRevealed.has(day.date_str);
 
         const col = document.createElement('div');
-        col.className = 'day-col' + (day.is_today ? ' today' : '')
-                      + (op ? ' op-day' : '') + (tunnel ? ' op-tunnel' : '');
+        col.className = 'day-col' + (day.is_today ? ' today' : '') + (op ? ' op-day' : '');
         col.dataset.day = day.name;
 
         col.innerHTML = `<div class="day-header">
@@ -659,8 +656,9 @@ function renderWeek(data) {
         tasksDiv.dataset.section = day.name;
         tasksDiv.dataset.date = day.date_str;
 
-        // The global recurring ghosts are part of the daily noise an Operation mutes.
-        if (!tunnel) {
+        // An Operation only mutes the global recurring ghosts (low-value noise) \u2014
+        // every real task, Operation-tagged or not, always stays visible.
+        if (!op) {
             data.recurring.forEach(text => {
                 const item = document.createElement('div');
                 item.className = 'wp-recurring-item';
@@ -676,40 +674,9 @@ function renderWeek(data) {
             }
         }
 
-        const visibleItems = tunnel
-            ? day.items.filter(t => t.operation_id === op.id)
-            : day.items;
-        const hiddenCount = day.items.length - visibleItems.length;
-
-        visibleItems.forEach(task => {
+        day.items.forEach(task => {
             tasksDiv.appendChild(makeTaskEl(task, day.date_str, day.name, prefixColorMap));
         });
-
-        if (tunnel && (hiddenCount > 0 || data.recurring.length > 0)) {
-            const chip = document.createElement('button');
-            chip.className = 'day-op-reveal';
-            const bits = [];
-            if (hiddenCount > 0) bits.push(`${hiddenCount} task${hiddenCount === 1 ? '' : 's'}`);
-            if (data.recurring.length > 0) bits.push('recurring');
-            chip.textContent = `+ ${bits.join(' + ')} hidden`;
-            chip.title = 'Show what this Operation is muting';
-            chip.addEventListener('click', e => {
-                e.stopPropagation();
-                opRevealed.add(day.date_str);
-                renderWeek(lastWeekData);
-            });
-            tasksDiv.appendChild(chip);
-        } else if (op && !tunnel) {
-            const chip = document.createElement('button');
-            chip.className = 'day-op-reveal revealed';
-            chip.textContent = '\u2013 back to Operation only';
-            chip.addEventListener('click', e => {
-                e.stopPropagation();
-                opRevealed.delete(day.date_str);
-                renderWeek(lastWeekData);
-            });
-            tasksDiv.appendChild(chip);
-        }
 
         col.appendChild(tasksDiv);
 
@@ -797,7 +764,8 @@ function renderWeek(data) {
 
 function makeTaskEl(task, dateStr, section, prefixColorMap = {}) {
     const div = document.createElement('div');
-    div.className = 'wp-task-item' + (task.checked ? ' checked' : '');
+    div.className = 'wp-task-item' + (task.checked ? ' checked' : '')
+                   + (task.operation_id ? ' op-tagged' : '');
     div.dataset.sectionIdx = task.section_idx;
     div.dataset.date = dateStr;
     div.dataset.section = section;
@@ -820,6 +788,10 @@ function makeTaskEl(task, dateStr, section, prefixColorMap = {}) {
     const stepsBlocked = stepsTotal > 0 && !task.checked && stepsDone < stepsTotal;
 
     let badges = '';
+    if (task.operation_id) {
+        const opName = opById[task.operation_id]?.name || 'Operation';
+        badges += `<span class="wp-op-badge" title="Mission: ${esc(opName)}">&#9670;</span>`;
+    }
     if (task.recur) badges += `<span class="wp-recur-badge" title="Recurring: ${esc(task.recur)}">&#8635;</span>`;
     if (task.attachment) badges += `<span class="wp-attach-badge" title="${esc(task.attachment)}">&#128206;</span>`;
     if (task.note) badges += `<span class="wp-note-dot">&#183;</span>`;
@@ -868,6 +840,7 @@ function makeTaskEl(task, dateStr, section, prefixColorMap = {}) {
             steps: steps,
             color: task.color || null,
             block_id: task.block_id || null,
+            operation_id: task.operation_id || null,
         });
     });
 
@@ -2205,11 +2178,6 @@ document.getElementById('wp-card-op-pills').addEventListener('click', async func
         if (err.error) { alert(err.error); return; }
     }
     activeCard.operation_id = next || null;
-    // Untagging on a day that is still in tunnel vision hides the task
-    // immediately, which would strand the card panel over something you can no
-    // longer see. If the day has been revealed, the task stays put.
-    const stillHidden = !next && !opRevealed.has(activeCard.date_str);
-    if (stillHidden) await closeCardPanel();
     loadWeek(currentWeekMonday);
 });
 

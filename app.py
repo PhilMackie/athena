@@ -30,6 +30,8 @@ from daemons.operations import (
     init_operations_db,
     list_operations, add_operation, rename_operation,
     set_operation_dates, delete_operation,
+    add_objective, toggle_objective, rename_objective,
+    delete_objective, reorder_objectives,
 )
 
 logging.basicConfig(
@@ -759,6 +761,79 @@ def api_operations_delete():
     if "error" in result:
         return jsonify(result), 400
     logger.info(f"Operation deleted: {operation_id}")
+    return jsonify(result)
+
+
+@app.route("/api/operations/objective", methods=["POST"])
+@login_required
+def api_objective_add():
+    data = request.get_json() or {}
+    operation_id = data.get("operation_id", "")
+    text = data.get("text", "")
+    if not operation_id or not text:
+        return jsonify({"error": "operation_id, text required"}), 400
+    result = add_objective(operation_id, text)
+    if "error" in result:
+        return jsonify(result), 400
+    logger.info(f"Objective added to {operation_id}: {text}")
+    return jsonify(result)
+
+
+@app.route("/api/operations/objective/toggle", methods=["POST"])
+@login_required
+def api_objective_toggle():
+    data = request.get_json() or {}
+    operation_id = data.get("operation_id", "")
+    objective_id = data.get("objective_id", "")
+    checked = bool(data.get("checked"))
+    if not operation_id or not objective_id:
+        return jsonify({"error": "operation_id, objective_id required"}), 400
+    result = toggle_objective(operation_id, objective_id, checked)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/operations/objective/rename", methods=["POST"])
+@login_required
+def api_objective_rename():
+    data = request.get_json() or {}
+    operation_id = data.get("operation_id", "")
+    objective_id = data.get("objective_id", "")
+    text = data.get("text", "")
+    if not operation_id or not objective_id or not text:
+        return jsonify({"error": "operation_id, objective_id, text required"}), 400
+    result = rename_objective(operation_id, objective_id, text)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/operations/objective", methods=["DELETE"])
+@login_required
+def api_objective_delete():
+    data = request.get_json() or {}
+    operation_id = data.get("operation_id", "")
+    objective_id = data.get("objective_id", "")
+    if not operation_id or not objective_id:
+        return jsonify({"error": "operation_id, objective_id required"}), 400
+    result = delete_objective(operation_id, objective_id)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/operations/objective/reorder", methods=["POST"])
+@login_required
+def api_objective_reorder():
+    data = request.get_json() or {}
+    operation_id = data.get("operation_id", "")
+    ordered_ids = data.get("ordered_ids") or []
+    if not operation_id:
+        return jsonify({"error": "operation_id required"}), 400
+    result = reorder_objectives(operation_id, ordered_ids)
+    if "error" in result:
+        return jsonify(result), 400
     return jsonify(result)
 
 

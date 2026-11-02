@@ -1162,5 +1162,111 @@ class TestOperations(unittest.TestCase):
         self.assertEqual(op["task_count"], 2)
 
 
+# ── Mission Objectives ──────────────────────────────────────────────────────────
+
+class TestObjectives(unittest.TestCase):
+    def setUp(self):
+        _reset_db()
+        operations.init_operations_db()
+        self.op_id = operations.add_operation("Quanta", WEDNESDAY, FRIDAY)["id"]
+
+    def _op(self):
+        return next(o for o in operations.list_operations() if o["id"] == self.op_id)
+
+    def test_add_objective(self):
+        operations.add_objective(self.op_id, "Recon targets")
+        op = self._op()
+        self.assertEqual(len(op["objectives"]), 1)
+        self.assertEqual(op["objectives"][0]["text"], "Recon targets")
+        self.assertFalse(op["objectives"][0]["checked"])
+
+    def test_add_objective_requires_text(self):
+        self.assertIn("error", operations.add_objective(self.op_id, "   "))
+
+    def test_add_objective_requires_known_operation(self):
+        self.assertIn("error", operations.add_objective("nope", "Recon"))
+
+    def test_objectives_ordered_by_position(self):
+        operations.add_objective(self.op_id, "First")
+        operations.add_objective(self.op_id, "Second")
+        operations.add_objective(self.op_id, "Third")
+        op = self._op()
+        self.assertEqual([o["text"] for o in op["objectives"]], ["First", "Second", "Third"])
+
+    def test_toggle_objective(self):
+        obj_id = operations.add_objective(self.op_id, "Ship it")["id"]
+        operations.toggle_objective(self.op_id, obj_id, True)
+        op = self._op()
+        self.assertTrue(op["objectives"][0]["checked"])
+        self.assertEqual(op["objectives_done"], 1)
+
+        operations.toggle_objective(self.op_id, obj_id, False)
+        op = self._op()
+        self.assertFalse(op["objectives"][0]["checked"])
+        self.assertEqual(op["objectives_done"], 0)
+
+    def test_toggle_unknown_objective_errors(self):
+        self.assertIn("error", operations.toggle_objective(self.op_id, "nope", True))
+
+    def test_rename_objective(self):
+        obj_id = operations.add_objective(self.op_id, "Draft brief")["id"]
+        operations.rename_objective(self.op_id, obj_id, "Draft the final brief")
+        op = self._op()
+        self.assertEqual(op["objectives"][0]["text"], "Draft the final brief")
+
+    def test_rename_objective_requires_text(self):
+        obj_id = operations.add_objective(self.op_id, "Draft brief")["id"]
+        self.assertIn("error", operations.rename_objective(self.op_id, obj_id, ""))
+
+    def test_delete_objective_renormalizes_positions(self):
+        a = operations.add_objective(self.op_id, "A")["id"]
+        operations.add_objective(self.op_id, "B")["id"]
+        c = operations.add_objective(self.op_id, "C")["id"]
+        operations.delete_objective(self.op_id, a)
+        op = self._op()
+        self.assertEqual([o["text"] for o in op["objectives"]], ["B", "C"])
+        self.assertEqual([o["position"] for o in op["objectives"]], [0, 1])
+
+    def test_delete_unknown_objective_errors(self):
+        self.assertIn("error", operations.delete_objective(self.op_id, "nope"))
+
+    def test_reorder_objectives(self):
+        a = operations.add_objective(self.op_id, "A")["id"]
+        b = operations.add_objective(self.op_id, "B")["id"]
+        c = operations.add_objective(self.op_id, "C")["id"]
+        operations.reorder_objectives(self.op_id, [c, a, b])
+        op = self._op()
+        self.assertEqual([o["text"] for o in op["objectives"]], ["C", "A", "B"])
+
+    def test_objectives_total_and_done_counts(self):
+        a = operations.add_objective(self.op_id, "A")["id"]
+        operations.add_objective(self.op_id, "B")
+        operations.toggle_objective(self.op_id, a, True)
+        op = self._op()
+        self.assertEqual(op["objectives_total"], 2)
+        self.assertEqual(op["objectives_done"], 1)
+
+    def test_deleting_operation_cascades_objectives(self):
+        operations.add_objective(self.op_id, "Recon")
+        operations.add_objective(self.op_id, "Ship it")
+        operations.delete_operation(self.op_id)
+        with weekplan.get_db() as conn:
+            remaining = conn.execute(
+                "SELECT COUNT(*) FROM operation_tasks WHERE operation_id=?", (self.op_id,)
+            ).fetchone()[0]
+        self.assertEqual(remaining, 0)
+
+    def test_objectives_independent_of_week_navigation(self):
+        # The whole point: objectives aren't week-scoped like Scratchpad, and
+        # aren't date-derived like a tagged day task — they just belong to the
+        # Operation, full stop, regardless of which week is being viewed.
+        operations.add_objective(self.op_id, "Persistent objective")
+        weekplan.get_or_create_week(_mon(5))   # jump five weeks away and back
+        weekplan.get_or_create_week(MONDAY)
+        op = self._op()
+        self.assertEqual(len(op["objectives"]), 1)
+        self.assertEqual(op["objectives"][0]["text"], "Persistent objective")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,10 @@
     <div class="wp-op-marquee-track" id="wp-op-marquee-track"></div>
 </div>
 
+<!-- Mission objectives — the Operation's own persistent checklist, independent
+     of date. Shows one group per Operation covering the week on screen. -->
+<div id="wp-op-objectives"></div>
+
 <!-- Week navigation -->
 <div class="week-nav">
     <button class="week-nav-btn" id="prev-week">&#8592;</button>
@@ -288,10 +292,12 @@
         <table class="rcr-table">
             <thead>
                 <tr>
+                    <th style="width:20px"></th>
                     <th>Operation</th>
                     <th>Days</th>
                     <th>Span</th>
                     <th>Tasks</th>
+                    <th>Objectives</th>
                     <th>Status</th>
                     <th></th>
                 </tr>
@@ -606,6 +612,7 @@ function renderWeek(data) {
     opById = {};
     (data.operations || []).forEach(op => { opById[op.id] = op; });
     renderOpMarquee(data);
+    renderOpObjectivesPanel(data);
 
     document.getElementById('week-dates').textContent = data.header;
     document.getElementById('week-num-label').textContent = `WEEK ${data.week_num}`;
@@ -2234,11 +2241,15 @@ async function loadOperations() {
     const ops = await fetchOperationsList();
     const tbody = document.getElementById('op-tbody');
     if (ops.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="op-empty">No Operations yet</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="op-empty">No Operations yet</td></tr>';
         return;
     }
-    tbody.innerHTML = ops.map(op => `
+    tbody.innerHTML = ops.map(op => {
+        const expanded = opExpandedInModal.has(op.id);
+        const mainRow = `
         <tr>
+            <td><button class="op-expand-btn${expanded ? ' expanded' : ''}"
+                        data-expand-op="${op.id}" title="Mission objectives">&#9656;</button></td>
             <td><input class="op-name-input" data-op-id="${op.id}"
                        value="${esc(op.name)}" autocomplete="off"></td>
             <td class="op-cell-num">${op.day_count}</td>
@@ -2249,10 +2260,16 @@ async function loadOperations() {
                        data-which="end" value="${op.end_date}">
             </td>
             <td class="op-cell-num">${op.task_count}</td>
+            <td class="op-cell-num">${op.objectives_done}/${op.objectives_total}</td>
             <td><span class="op-status op-status-${op.status}">${op.status}</span></td>
             <td><button class="rcr-del-btn" data-del-op="${op.id}"
                         title="Delete Operation">&#10005;</button></td>
-        </tr>`).join('');
+        </tr>`;
+        const expandRow = expanded
+            ? `<tr class="op-obj-row"><td></td><td colspan="7">${objectivesListHtml(op)}</td></tr>`
+            : '';
+        return mainRow + expandRow;
+    }).join('');
 
     tbody.querySelectorAll('.op-name-input').forEach(inp => {
         inp.addEventListener('blur', () => renameOperation(inp.dataset.opId, inp.value));
@@ -2269,6 +2286,15 @@ async function loadOperations() {
     tbody.querySelectorAll('[data-del-op]').forEach(btn => {
         btn.addEventListener('click', () => deleteOperation(btn.dataset.delOp));
     });
+    tbody.querySelectorAll('[data-expand-op]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const id = btn.dataset.expandOp;
+            if (opExpandedInModal.has(id)) opExpandedInModal.delete(id);
+            else opExpandedInModal.add(id);
+            loadOperations();
+        });
+    });
+    wireObjectiveListeners(tbody);
 }
 
 async function submitAddOperation() {
@@ -2324,10 +2350,11 @@ async function setOperationDates(operationId, start_date, end_date) {
 
 async function deleteOperation(operationId) {
     const op = cachedOperations.find(o => o.id === operationId);
-    const tagged = op && op.task_count
-        ? `\n${op.task_count} task(s) will stay on their days, just untagged.`
-        : '';
-    if (!confirm(`Delete Operation "${op ? op.name : ''}"?${tagged}`)) return;
+    const bits = [];
+    if (op && op.task_count) bits.push(`${op.task_count} task(s) will stay on their days, just untagged.`);
+    if (op && op.objectives_total) bits.push(`${op.objectives_total} mission objective(s) will be deleted for good.`);
+    const warning = bits.length ? '\n' + bits.join('\n') : '';
+    if (!confirm(`Delete Operation "${op ? op.name : ''}"?${warning}`)) return;
     await fetchApi('/api/operations', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
@@ -2344,6 +2371,168 @@ document.getElementById('op-add-name').addEventListener('keydown', e => {
 window.addEventListener('resize', () => {
     if (lastWeekData) renderOpMarquee(lastWeekData);
 });
+
+// ── Mission objectives ───────────────────────────────────────────────────────
+// A flat checklist owned by the Operation itself, not by any day. It shows up
+// in two places sharing the same markup/listeners: the week-view panel (for
+// Operations covering the week on screen) and an expandable row per Operation
+// in the manager modal (reachable regardless of which week is in view).
+
+let opExpandedInModal = new Set();
+const OP_OBJ_COLLAPSED_KEY = 'athena-op-objectives-collapsed';
+
+function getOpObjCollapsed() {
+    try { return new Set(JSON.parse(localStorage.getItem(OP_OBJ_COLLAPSED_KEY)) || []); }
+    catch { return new Set(); }
+}
+function setOpObjCollapsed(set) {
+    try { localStorage.setItem(OP_OBJ_COLLAPSED_KEY, JSON.stringify([...set])); } catch {}
+}
+
+async function addObjectiveApi(operationId, text) {
+    return fetchApi('/api/operations/objective', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation_id: operationId, text }),
+    });
+}
+async function toggleObjectiveApi(operationId, objectiveId, checked) {
+    return fetchApi('/api/operations/objective/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation_id: operationId, objective_id: objectiveId, checked }),
+    });
+}
+async function renameObjectiveApi(operationId, objectiveId, text) {
+    return fetchApi('/api/operations/objective/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation_id: operationId, objective_id: objectiveId, text }),
+    });
+}
+async function deleteObjectiveApi(operationId, objectiveId) {
+    return fetchApi('/api/operations/objective', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation_id: operationId, objective_id: objectiveId }),
+    });
+}
+
+function objectivesListHtml(op) {
+    const items = (op.objectives || []).map(o => `
+        <div class="wp-op-obj-item${o.checked ? ' checked' : ''}" data-obj-id="${o.id}" data-op-id="${op.id}">
+            <input type="checkbox" class="wp-op-obj-check" ${o.checked ? 'checked' : ''}>
+            <input type="text" class="wp-op-obj-text" value="${esc(o.text)}" autocomplete="off">
+            <button class="wp-op-obj-del" title="Remove objective">&#10005;</button>
+        </div>`).join('');
+    const empty = (op.objectives || []).length === 0
+        ? '<div class="wp-op-obj-empty">No objectives yet</div>' : '';
+    return `
+        <div class="wp-op-obj-list" data-op-id="${op.id}">${items}${empty}</div>
+        <div class="wp-op-obj-add">
+            <input type="text" class="wp-add-input wp-op-obj-add-input"
+                   data-op-id="${op.id}" placeholder="+ objective" autocomplete="off">
+        </div>`;
+}
+
+// Re-renders whichever surfaces are currently showing objectives, after any
+// add/toggle/rename/delete — mirrors the fetch-and-rebuild pattern the rest
+// of the app uses for blocks/recurring/birthdays rather than patching the DOM.
+async function refreshOperationsEverywhere() {
+    if (document.getElementById('operations-modal').classList.contains('open')) {
+        await loadOperations();
+    }
+    if (lastWeekData && (lastWeekData.operations || []).length > 0) {
+        await renderOpObjectivesPanel(lastWeekData);
+    }
+}
+
+function wireObjectiveListeners(container) {
+    container.querySelectorAll('.wp-op-obj-check').forEach(cb => {
+        cb.addEventListener('change', async () => {
+            const item = cb.closest('.wp-op-obj-item');
+            await toggleObjectiveApi(item.dataset.opId, item.dataset.objId, cb.checked);
+            refreshOperationsEverywhere();
+        });
+    });
+    container.querySelectorAll('.wp-op-obj-text').forEach(inp => {
+        let original = inp.value;
+        inp.addEventListener('focus', () => { original = inp.value; });
+        inp.addEventListener('blur', async () => {
+            const item = inp.closest('.wp-op-obj-item');
+            const val = inp.value.trim();
+            if (!val) { inp.value = original; return; }
+            if (val === original) return;
+            await renameObjectiveApi(item.dataset.opId, item.dataset.objId, val);
+            refreshOperationsEverywhere();
+        });
+        inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+    });
+    container.querySelectorAll('.wp-op-obj-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const item = btn.closest('.wp-op-obj-item');
+            await deleteObjectiveApi(item.dataset.opId, item.dataset.objId);
+            refreshOperationsEverywhere();
+        });
+    });
+    container.querySelectorAll('.wp-op-obj-add-input').forEach(inp => {
+        inp.addEventListener('keydown', async e => {
+            if (e.key !== 'Enter') return;
+            const text = inp.value.trim();
+            if (!text) return;
+            inp.value = '';
+            inp.disabled = true;
+            await addObjectiveApi(inp.dataset.opId, text);
+            inp.disabled = false;
+            refreshOperationsEverywhere();
+        });
+    });
+}
+
+async function renderOpObjectivesPanel(data) {
+    const panel = document.getElementById('wp-op-objectives');
+    if (!panel) return;
+    const opsOnScreen = data.operations || [];
+    if (opsOnScreen.length === 0) {
+        panel.innerHTML = '';
+        return;
+    }
+    // data.operations (from the week payload) only carries display fields —
+    // fetch the full list for the embedded objectives.
+    const full = await fetchOperationsList();
+    const byId = {};
+    full.forEach(o => { byId[o.id] = o; });
+    const collapsed = getOpObjCollapsed();
+
+    panel.innerHTML = opsOnScreen.map(ref => {
+        const op = byId[ref.id];
+        if (!op) return '';
+        const isCollapsed = collapsed.has(op.id);
+        return `
+            <div class="wp-op-obj-group${isCollapsed ? ' collapsed' : ''}" data-op-id="${op.id}">
+                <div class="wp-op-obj-header">
+                    <span class="wp-op-obj-icon">&#9670;</span>
+                    <span class="wp-op-obj-name">Mission Objectives &mdash; ${esc(op.name)}</span>
+                    <span class="wp-op-obj-progress">${op.objectives_done}/${op.objectives_total}</span>
+                    <button class="wp-day-eye wp-op-obj-toggle" title="Hide/show">&#9900;</button>
+                </div>
+                <div class="wp-op-obj-body">${objectivesListHtml(op)}</div>
+            </div>`;
+    }).join('');
+
+    panel.querySelectorAll('.wp-op-obj-toggle').forEach(btn => {
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            const group = btn.closest('.wp-op-obj-group');
+            const opId = group.dataset.opId;
+            const set = getOpObjCollapsed();
+            if (set.has(opId)) set.delete(opId); else set.add(opId);
+            setOpObjCollapsed(set);
+            group.classList.toggle('collapsed');
+        });
+    });
+    wireObjectiveListeners(panel);
+}
 
 // ── Time Blocks ─────────────────────────────────────────────────────────────
 

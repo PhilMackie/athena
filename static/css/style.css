@@ -1953,3 +1953,139 @@ input[type="text"]:focus {
 .op-status-active   { color: #44cc66; }
 .op-status-upcoming { color: var(--accent); }
 .op-status-past     { color: var(--text-secondary); }
+
+/* ── Mission objectives ──────────────────────────────────────────────────── */
+
+/* Week-view panel — one group per Operation covering the week on screen */
+#wp-op-objectives {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.wp-op-obj-group {
+    border: 1px solid rgba(185, 103, 255, 0.35);
+    background: linear-gradient(180deg, rgba(185, 103, 255, 0.05), transparent 60px);
+}
+
+.wp-op-obj-header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 9px;
+    background: rgba(185, 103, 255, 0.08);
+    border-bottom: 1px solid rgba(185, 103, 255, 0.2);
+    user-select: none;
+}
+
+.wp-op-obj-group.collapsed .wp-op-obj-header { border-bottom: none; }
+.wp-op-obj-group.collapsed .wp-op-obj-body { display: none; }
+
+.wp-op-obj-icon { color: var(--accent); font-size: 0.625rem; flex-shrink: 0; }
+
+.wp-op-obj-name {
+    flex: 1;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wp-op-obj-progress {
+    font-size: 0.6875rem;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.wp-op-obj-header .wp-day-eye { opacity: 0.5; }
+.wp-op-obj-header:hover .wp-day-eye { opacity: 0.8; }
+
+.wp-op-obj-body { padding: 4px 9px 8px; }
+
+.wp-op-obj-list { display: flex; flex-direction: column; }
+
+.wp-op-obj-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 2px;
+}
+
+.wp-op-obj-check {
+    flex-shrink: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.wp-op-obj-text {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    padding: 2px 4px;
+    outline: none;
+}
+.wp-op-obj-text:hover { border-color: #2a2a3a; }
+.wp-op-obj-text:focus { border-color: var(--accent); background: #0d0d0d; }
+
+.wp-op-obj-item.checked .wp-op-obj-text {
+    color: var(--text-secondary);
+    text-decoration: line-through;
+}
+
+.wp-op-obj-del {
+    flex-shrink: 0;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.6875rem;
+    padding: 2px 5px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s;
+}
+.wp-op-obj-item:hover .wp-op-obj-del { opacity: 0.6; }
+.wp-op-obj-del:hover { opacity: 1 !important; color: #ff4444; }
+
+.wp-op-obj-empty {
+    padding: 4px 2px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.wp-op-obj-add { padding: 2px; border-top: 1px solid #1c1c1c; margin-top: 2px; }
+.wp-op-obj-add-input { padding: 4px 4px !important; }
+
+@media (max-width: 819px) {
+    .wp-op-obj-item { padding: 6px 2px; }
+    .wp-op-obj-del { opacity: 0.5; }
+}
+
+/* Operations modal — expand toggle + inline objectives row */
+.op-expand-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.6875rem;
+    cursor: pointer;
+    padding: 2px;
+    transition: transform 0.15s, color 0.15s;
+    display: inline-block;
+}
+.op-expand-btn.expanded { transform: rotate(90deg); color: var(--accent); }
+.op-expand-btn:hover { color: var(--accent); }
+
+.op-obj-row td {
+    background: #0a0612;
+    border-bottom: 1px solid #1e1e2e;
+    padding: 2px 10px 8px !important;
+}
+.op-obj-row .wp-op-obj-add { border-top: 1px solid #1c1c1c; }

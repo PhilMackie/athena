@@ -19,6 +19,7 @@ _fake_config = types.SimpleNamespace(
 sys.modules["config"] = _fake_config  # type: ignore
 
 from daemons import weekplan  # noqa: E402  (must come after stub)
+from daemons import operations  # noqa: E402
 
 
 def _reset_db():
@@ -984,6 +985,181 @@ class TestAddMonths(unittest.TestCase):
 
     def test_12_months_same_day(self):
         self.assertEqual(weekplan._add_months(date(2025, 6, 15), 12), date(2026, 6, 15))
+
+
+# ── Operations ────────────────────────────────────────────────────────────────
+
+class TestOperations(unittest.TestCase):
+    def setUp(self):
+        _reset_db()
+        operations.init_operations_db()
+
+    def _launch(self, name="Quanta", start=WEDNESDAY, end=FRIDAY):
+        return operations.add_operation(name, start, end)["id"]
+
+    # -- creation --
+
+    def test_add_operation_covers_inclusive_range(self):
+        op_id = self._launch()
+        op = next(o for o in operations.list_operations() if o["id"] == op_id)
+        self.assertEqual(op["day_count"], 3)
+        self.assertEqual(op["dates"], [WEDNESDAY, THURSDAY, FRIDAY])
+
+    def test_add_operation_requires_name(self):
+        self.assertIn("error", operations.add_operation("  ", WEDNESDAY, FRIDAY))
+
+    def test_add_operation_rejects_bad_dates(self):
+        self.assertIn("error", operations.add_operation("Quanta", "not-a-date", FRIDAY))
+
+    def test_add_operation_swaps_reversed_range(self):
+        op_id = operations.add_operation("Quanta", FRIDAY, WEDNESDAY)["id"]
+        op = next(o for o in operations.list_operations() if o["id"] == op_id)
+        self.assertEqual(op["start_date"], WEDNESDAY)
+        self.assertEqual(op["end_date"], FRIDAY)
+
+    def test_single_day_operation(self):
+        op_id = self._launch(start=WEDNESDAY, end=WEDNESDAY)
+        op = next(o for o in operations.list_operations() if o["id"] == op_id)
+        self.assertEqual(op["day_count"], 1)
+
+    # -- week payload --
+
+    def test_week_marks_only_covered_days(self):
+        op_id = self._launch()
+        data = weekplan.get_or_create_week(MONDAY)
+        covered = {d["name"]: d["operation_id"] for d in data["days"]}
+        self.assertEqual(covered["Wednesday"], op_id)
+        self.assertEqual(covered["Thursday"], op_id)
+        self.assertEqual(covered["Friday"], op_id)
+        self.assertIsNone(covered["Monday"])
+        self.assertIsNone(covered["Tuesday"])
+        self.assertIsNone(covered["Saturday"])
+
+    def test_week_lists_overlapping_operations(self):
+        op_id = self._launch()
+        data = weekplan.get_or_create_week(MONDAY)
+        self.assertEqual([o["id"] for o in data["operations"]], [op_id])
+
+    def test_week_excludes_operations_from_other_weeks(self):
+        self._launch(start="2025-07-01", end="2025-07-03")
+        data = weekplan.get_or_create_week(MONDAY)
+        self.assertEqual(data["operations"], [])
+
+    def test_operation_spanning_week_boundary_appears_in_both(self):
+        op_id = self._launch(start=SUNDAY, end=NEXT_MON)
+        this_week = weekplan.get_or_create_week(MONDAY)
+        next_week = weekplan.get_or_create_week(NEXT_MON)
+        self.assertEqual([o["id"] for o in this_week["operations"]], [op_id])
+        self.assertEqual([o["id"] for o in next_week["operations"]], [op_id])
+
+    def test_overlapping_operations_first_wins_a_day(self):
+        first = self._launch("Alpha", WEDNESDAY, FRIDAY)
+        self._launch("Bravo", WEDNESDAY, FRIDAY)
+        data = weekplan.get_or_create_week(MONDAY)
+        wed = next(d for d in data["days"] if d["name"] == "Wednesday")
+        self.assertEqual(wed["operation_id"], first)
+
+    # -- tagging --
+
+    def test_add_task_with_operation_id(self):
+        op_id = self._launch()
+        weekplan.add_task(WEDNESDAY, "Wednesday", "Recon", operation_id=op_id)
+        data = weekplan.get_or_create_week(MONDAY)
+        wed = next(d for d in data["days"] if d["name"] == "Wednesday")
+        self.assertEqual(wed["items"][0]["operation_id"], op_id)
+
+    def test_set_task_operation_tags_and_clears(self):
+        op_id = self._launch()
+        weekplan.add_task(WEDNESDAY, "Wednesday", "Recon")
+        weekplan.set_task_operation(WEDNESDAY, "Wednesday", 0, op_id)
+        data = weekplan.get_or_create_week(MONDAY)
+        wed = next(d for d in data["days"] if d["name"] == "Wednesday")
+        self.assertEqual(wed["items"][0]["operation_id"], op_id)
+
+        weekplan.set_task_operation(WEDNESDAY, "Wednesday", 0, None)
+        data = weekplan.get_or_create_week(MONDAY)
+        wed = next(d for d in data["days"] if d["name"] == "Wednesday")
+        self.assertIsNone(wed["items"][0]["operation_id"])
+
+    def test_cannot_tag_day_the_operation_misses(self):
+        op_id = self._launch()
+        weekplan.add_task(MONDAY, "Monday", "Off-op")
+        result = weekplan.set_task_operation(MONDAY, "Monday", 0, op_id)
+        self.assertIn("error", result)
+
+    def test_cannot_tag_someday_task(self):
+        op_id = self._launch()
+        weekplan.add_task(MONDAY, "Someday", "One day")
+        result = weekplan.set_task_operation(MONDAY, "Someday", 0, op_id)
+        self.assertIn("error", result)
+
+    def test_tag_survives_duplicate(self):
+        op_id = self._launch()
+        weekplan.add_task(WEDNESDAY, "Wednesday", "Recon", operation_id=op_id)
+        weekplan.duplicate_task(WEDNESDAY, "Wednesday", 0)
+        data = weekplan.get_or_create_week(MONDAY)
+        wed = next(d for d in data["days"] if d["name"] == "Wednesday")
+        self.assertEqual([t["operation_id"] for t in wed["items"]], [op_id, op_id])
+
+    def test_defer_out_of_range_clears_tag(self):
+        op_id = self._launch(start=WEDNESDAY, end=WEDNESDAY)
+        weekplan.add_task(WEDNESDAY, "Wednesday", "Recon", operation_id=op_id)
+        weekplan.defer_task(WEDNESDAY, "Wednesday", 0, "tomorrow")
+        data = weekplan.get_or_create_week(MONDAY)
+        thu = next(d for d in data["days"] if d["name"] == "Thursday")
+        self.assertIsNone(thu["items"][0]["operation_id"])
+
+    def test_defer_within_range_keeps_tag(self):
+        op_id = self._launch(start=WEDNESDAY, end=FRIDAY)
+        weekplan.add_task(WEDNESDAY, "Wednesday", "Recon", operation_id=op_id)
+        weekplan.defer_task(WEDNESDAY, "Wednesday", 0, "tomorrow")
+        data = weekplan.get_or_create_week(MONDAY)
+        thu = next(d for d in data["days"] if d["name"] == "Thursday")
+        self.assertEqual(thu["items"][0]["operation_id"], op_id)
+
+    # -- re-ranging and deletion --
+
+    def test_re_range_clears_tags_on_dropped_days(self):
+        op_id = self._launch(start=WEDNESDAY, end=FRIDAY)
+        weekplan.add_task(WEDNESDAY, "Wednesday", "Dropped", operation_id=op_id)
+        weekplan.add_task(FRIDAY, "Friday", "Kept", operation_id=op_id)
+        operations.set_operation_dates(op_id, THURSDAY, FRIDAY)
+        data = weekplan.get_or_create_week(MONDAY)
+        wed = next(d for d in data["days"] if d["name"] == "Wednesday")
+        fri = next(d for d in data["days"] if d["name"] == "Friday")
+        self.assertIsNone(wed["items"][0]["operation_id"])
+        self.assertEqual(fri["items"][0]["operation_id"], op_id)
+
+    def test_delete_operation_keeps_tasks_but_untags(self):
+        op_id = self._launch()
+        weekplan.add_task(WEDNESDAY, "Wednesday", "Recon", operation_id=op_id)
+        operations.delete_operation(op_id)
+        data = weekplan.get_or_create_week(MONDAY)
+        wed = next(d for d in data["days"] if d["name"] == "Wednesday")
+        self.assertEqual(len(wed["items"]), 1)
+        self.assertIsNone(wed["items"][0]["operation_id"])
+        self.assertEqual(data["operations"], [])
+
+    def test_delete_unknown_operation_errors(self):
+        self.assertIn("error", operations.delete_operation("nope"))
+
+    def test_rename_operation(self):
+        op_id = self._launch()
+        operations.rename_operation(op_id, "Nightfall")
+        op = next(o for o in operations.list_operations() if o["id"] == op_id)
+        self.assertEqual(op["name"], "Nightfall")
+
+    def test_rename_requires_name(self):
+        op_id = self._launch()
+        self.assertIn("error", operations.rename_operation(op_id, "   "))
+
+    def test_task_count_reflects_tagged_tasks(self):
+        op_id = self._launch()
+        weekplan.add_task(WEDNESDAY, "Wednesday", "A", operation_id=op_id)
+        weekplan.add_task(THURSDAY, "Thursday", "B", operation_id=op_id)
+        weekplan.add_task(MONDAY, "Monday", "Off-op")
+        op = next(o for o in operations.list_operations() if o["id"] == op_id)
+        self.assertEqual(op["task_count"], 2)
 
 
 if __name__ == "__main__":

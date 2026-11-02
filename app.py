@@ -13,7 +13,7 @@ from daemons.weekplan import (
     get_or_create_week, add_task, toggle_task, delete_task, delete_task_all_future,
     set_task_recur, defer_task, duplicate_task, attach_file, reorder_section,
     set_task_note, rename_task, set_task_binding, toggle_step, set_step_count,
-    set_task_color, purge_scratchpad_done,
+    set_task_color, purge_scratchpad_done, set_task_operation,
     list_birthdays, add_birthday, delete_birthday, bulk_set_birthday_reminders,
     list_recurring_tasks, add_recurring_task, delete_all_recurring,
     import_calendar_csv, list_imported_tasks, delete_imported_task,
@@ -25,6 +25,11 @@ from daemons.blocks import (
     set_block_task_color, delete_block_task, reorder_block_tasks, move_block_task,
     link_task_to_block, unlink_task_from_block, send_block_task_to_day,
     reset_stale_tasks,
+)
+from daemons.operations import (
+    init_operations_db,
+    list_operations, add_operation, rename_operation,
+    set_operation_dates, delete_operation,
 )
 
 logging.basicConfig(
@@ -43,6 +48,7 @@ app.permanent_session_lifetime = timedelta(days=30)
 
 init_db()
 init_blocks_db()
+init_operations_db()
 
 
 def _set_network_cookie(response):
@@ -170,9 +176,11 @@ def api_task_add():
     text = data.get("text", "")
     recur = data.get("recur") or None
     note = data.get("note") or None
+    operation_id = data.get("operation_id") or None
     if not date_str or not section or not text:
         return jsonify({"error": "date, section, text required"}), 400
-    result = add_task(date_str, section, text, recur, note)
+    result = add_task(date_str, section, text, recur, note,
+                      operation_id=operation_id)
     if "error" in result:
         return jsonify(result), 400
     logger.info(f"Task added: [{section}] {text}")
@@ -668,6 +676,89 @@ def api_blocks_reset_stale():
     logger.info(
         f"Blocks reset: moved={result.get('moved')} deleted={result.get('deleted')} unlinked={result.get('unlinked')}"
     )
+    return jsonify(result)
+
+
+@app.route("/api/week/operation", methods=["POST"])
+@login_required
+def api_task_operation():
+    data = request.get_json() or {}
+    date_str = data.get("date", "")
+    section = data.get("section", "")
+    section_idx = data.get("section_idx")
+    operation_id = data.get("operation_id") or None
+    if not date_str or not section or section_idx is None:
+        return jsonify({"error": "date, section, section_idx required"}), 400
+    result = set_task_operation(date_str, section, int(section_idx), operation_id)
+    if "error" in result:
+        return jsonify(result), 400
+    logger.info(f"Task operation set: [{section}] idx {section_idx} -> {operation_id}")
+    return jsonify(result)
+
+
+@app.route("/api/operations", methods=["GET"])
+@login_required
+def api_operations_list():
+    return jsonify(list_operations())
+
+
+@app.route("/api/operations", methods=["POST"])
+@login_required
+def api_operations_add():
+    data = request.get_json() or {}
+    name = data.get("name", "")
+    start_date = data.get("start_date", "")
+    end_date = data.get("end_date", "") or start_date
+    if not name or not start_date:
+        return jsonify({"error": "name, start_date required"}), 400
+    result = add_operation(name, start_date, end_date)
+    if "error" in result:
+        return jsonify(result), 400
+    logger.info(f"Operation added: {name} ({start_date}..{end_date})")
+    return jsonify(result)
+
+
+@app.route("/api/operations/rename", methods=["POST"])
+@login_required
+def api_operations_rename():
+    data = request.get_json() or {}
+    operation_id = data.get("operation_id", "")
+    name = data.get("name", "")
+    if not operation_id or not name:
+        return jsonify({"error": "operation_id, name required"}), 400
+    result = rename_operation(operation_id, name)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/operations/dates", methods=["POST"])
+@login_required
+def api_operations_dates():
+    data = request.get_json() or {}
+    operation_id = data.get("operation_id", "")
+    start_date = data.get("start_date", "")
+    end_date = data.get("end_date", "") or start_date
+    if not operation_id or not start_date:
+        return jsonify({"error": "operation_id, start_date required"}), 400
+    result = set_operation_dates(operation_id, start_date, end_date)
+    if "error" in result:
+        return jsonify(result), 400
+    logger.info(f"Operation re-ranged: {operation_id} ({start_date}..{end_date})")
+    return jsonify(result)
+
+
+@app.route("/api/operations", methods=["DELETE"])
+@login_required
+def api_operations_delete():
+    data = request.get_json() or {}
+    operation_id = data.get("operation_id", "")
+    if not operation_id:
+        return jsonify({"error": "operation_id required"}), 400
+    result = delete_operation(operation_id)
+    if "error" in result:
+        return jsonify(result), 400
+    logger.info(f"Operation deleted: {operation_id}")
     return jsonify(result)
 
 

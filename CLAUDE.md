@@ -29,6 +29,8 @@ Full migration plan/rationale: `philVault/dev/Quanta/vault-reorg-plan.md`.
 - `config.py` — env-backed config (vault path, PIN hash, secret key)
 - `daemons/auth.py` — PIN auth (shared pattern with duo-brain)
 - `daemons/weekplan.py` — all task CRUD against SQLite
+- `daemons/blocks.py` — Time Blocks: global task-bucket containers, separate from the week grid
+- `daemons/operations.py` — Operations: named, date-ranged focus modes that mute a day column down to Operation work
 - `migrate.py` — one-time import of legacy markdown week files into DB
 - `templates/index.html` — full week UI (SortableJS drag, card panel)
 - `templates/base.html` — base layout (JetBrains Mono, purple accent #b967ff, scanlines)
@@ -60,6 +62,33 @@ tasks (
 **Global recurring tasks:** `vault/dev/Quanta/Templates/WeeklyRecurring.md`
 Read-only markdown list, shown in every day column as ghost indicators.
 
+**Time Blocks** (`daemons/blocks.py`) — global, week-independent task buckets:
+
+```sql
+time_blocks (id, name, position, created_at)
+
+time_block_tasks (
+    id, block_id, position, text, checked, note, color,
+    created_at, completed_at
+)
+```
+
+**Operations** (`daemons/operations.py`) — named focus modes pinned to a date range:
+
+```sql
+operations (id, name, start_date, end_date, created_at)
+```
+
+`tasks.operation_id` tags a day task into an Operation. Like `tasks.block_id` it has
+no FK/cascade — `delete_operation()` clears it manually, so the tasks survive and
+simply stop being Operation work. Only dated day tasks can be tagged: Scratchpad and
+Someday have no calendar date, so no Operation can ever cover them.
+
+A block holds two kinds of tasks: "own" tasks (live only in `time_block_tasks`, no day
+of their own) and "linked" tasks (a real `tasks` row tagged via `tasks.block_id` — stays
+on its day, just also surfaces inside the block). `tasks.block_id` has no FK/cascade;
+`delete_block()` clears it manually.
+
 ## API Routes
 
 | Method | Path | Purpose |
@@ -79,6 +108,28 @@ Read-only markdown list, shown in every day column as ghost indicators.
 | POST | `/api/import/calendar-csv` | Import Google Calendar-compliant CSV (multipart `file` or `csv_text`) |
 | GET | `/api/imported` | List CSV-imported tasks (flat, sorted by date) |
 | DELETE | `/api/imported` | Delete one CSV-imported task by `id` |
+| GET | `/api/blocks` | List all blocks with their own + linked tasks |
+| POST | `/api/blocks` | Add block |
+| DELETE | `/api/blocks` | Delete block (clears `block_id` on any linked tasks) |
+| POST | `/api/blocks/rename` | Rename block |
+| POST | `/api/blocks/task` | Add "own" task to a block |
+| POST | `/api/blocks/task/toggle` | Check/uncheck block task |
+| POST | `/api/blocks/task/rename` | Rename block task |
+| POST | `/api/blocks/task/note` | Set/clear block task note |
+| POST | `/api/blocks/task/color` | Set block task color |
+| DELETE | `/api/blocks/task` | Delete "own" block task |
+| POST | `/api/blocks/task/reorder` | Reorder tasks within a block |
+| POST | `/api/blocks/task/move` | Move "own" task between blocks |
+| POST | `/api/blocks/task/link` | Tag a day/Scratchpad/Someday task into a block |
+| POST | `/api/blocks/task/unlink` | Remove a linked task from its block (task itself untouched) |
+| POST | `/api/blocks/task/send-to-day` | Turn an "own" block task into a real day task, still linked |
+| POST | `/api/blocks/reset-stale` | Sweep leftovers from a previous day — see below |
+| POST | `/api/week/operation` | Tag/untag a day task into an Operation (`operation_id: null` clears) |
+| GET | `/api/operations` | List all Operations with day/task counts and status |
+| POST | `/api/operations` | Launch an Operation (`name`, `start_date`, `end_date`) |
+| POST | `/api/operations/rename` | Rename an Operation |
+| POST | `/api/operations/dates` | Re-range an Operation (untags days it no longer covers) |
+| DELETE | `/api/operations` | Delete an Operation (clears `operation_id` on its tasks) |
 
 ## UI — Key Patterns
 
@@ -108,6 +159,54 @@ Eye button (`◉`) in each day header toggles `.collapsed`. Desktop: `updateGrid
 ### Enter → Next Column
 `pendingFocusSection` is set on Enter keydown. After `renderWeek` rebuilds the DOM, it focuses that section's add input.
 
+### Time Blocks — Leftover Reset
+Opening Block view detects tasks left over from a previous day — "own" tasks by
+`created_at` date, "linked" tasks by their derived `date_str` — and prompts once per
+calendar day (`localStorage['athena-blocks-reset-dismissed']` holds the dismissed date)
+to reset. Confirming calls `reset_stale_tasks()` (blocks.py): unchecked leftovers are
+filed onto **yesterday's** day column (own tasks via `add_task`, linked tasks re-dated
+and unlinked); checked leftovers are discarded — own tasks deleted outright, linked
+tasks just unlinked in place since they're real, already-correctly-dated history.
+
+### Operations — Tunnel Vision
+An Operation is a name plus a contiguous, inclusive date range. Launch/manage them
+from the `◎` header button (`#operations-modal`, `z-index: 2001`).
+
+While an Operation covers a day column, that column drops into **tunnel vision**:
+the global `WeeklyRecurring` ghosts, every task with a `recur` cadence, and every
+untagged one-off are hidden, leaving only the tasks tagged with that
+`operation_id`.
+
+**Hiding is render-time only.** `get_or_create_week` returns the *whole* week as
+always — `renderWeek` does the filtering. This matters because `section_idx` is a
+task's position in the full section list; filtering server-side would shift every
+index and break toggle/delete/rename. `reorder_section` is index-free (it matches
+on text and renormalizes), so a partial ordered list from a filtered column is
+tolerated rather than destructive.
+
+Supporting pieces:
+- `opRevealed` — a module-level `Set` of dates temporarily taken out of tunnel
+  vision via the `+ N tasks + recurring hidden` chip. Session-only by design, so
+  focus resets on reload. Re-renders from `lastWeekData`, no refetch.
+- Tasks typed into an Operation day's `+` input are auto-tagged — otherwise they'd
+  vanish behind the filter the instant they were created. Same for a cross-column
+  drag: the tag follows the destination day (dragging out drops it).
+- `defer_task` and `set_operation_dates` clear `operation_id` when the task's new
+  date falls outside the range — a tag only means anything on a covered date.
+- Card panel shows an Operation pill row, but only for Operations that actually
+  cover that task's day.
+
+### Operation Marquee
+A scrolling alert band (`#wp-op-marquee`) sits between the page header and the week
+nav whenever an Operation overlaps the week on screen, reading
+`◆ OPERATION: QUANTA ◆ DAY 2 OF 4 ◆`.
+
+`renderOpMarquee` repeats the segment until one half overflows the viewport, then
+duplicates it so the `translateX(-50%)` keyframe loops seamlessly; duration is set
+from the measured half-width so speed stays constant regardless of name length.
+It re-measures on `resize`, and `prefers-reduced-motion` keeps the band but drops
+the scroll.
+
 ## Carry-Forward Logic
 
 When a new week is first accessed, `get_or_create_week` queries the previous week's Monday and copies:
@@ -134,3 +233,6 @@ Logs: `/opt/athena/logs/`
 - Someday container needs `data-date` and `data-section` set before SortableJS init
 - `migrate.py` must be run from `/opt/athena/app/` on the Pi so `config` is importable
 - `import_calendar_csv`: `csv.DictReader` gives short rows `None` (not `""`) for missing trailing columns, and unquoted commas inside the last column spill into `row[None]` (restkey) instead of staying in that field — both handled defensively, but a reminder that hand-built "Google Calendar CSV" exports are rarely well-formed
+- Operations deliberately hide tasks rather than move or delete them — if a task "disappears", check whether its day is covered by an Operation before hunting for a data bug. The `+ N hidden` chip on the column is the escape hatch
+- Two Operations may overlap; the first by `start_date, created_at` wins a contested day (`op_id_by_date.setdefault`)
+- Any new full-screen modal shown *while `#blocks-modal` is open* needs an explicit `z-index` above 2000 — `#blocks-modal` and the generic `.wp-modal-overlay` class both sit at `z-index: 2000`, and at a tie `#blocks-modal` (later in the DOM) paints over the other modal even though `style.display` is correctly `flex`. `#wp-blocks-reset-modal` sets `z-index: 2001` for this reason.

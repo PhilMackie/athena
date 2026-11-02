@@ -153,7 +153,8 @@ def init_db():
                 conn.execute(f'ALTER TABLE tasks ADD COLUMN {col} TEXT')
             except Exception:
                 pass
-        for col in ('steps TEXT', 'block_id TEXT', 'color TEXT', 'source TEXT'):
+        for col in ('steps TEXT', 'block_id TEXT', 'color TEXT', 'source TEXT',
+                    'operation_id TEXT'):
             try:
                 conn.execute(f'ALTER TABLE tasks ADD COLUMN {col}')
             except Exception:
@@ -221,6 +222,37 @@ def _normalize_positions(conn, week_monday: str, section: str):
         conn.execute("UPDATE tasks SET position=? WHERE id=?", (i, row["id"]))
 
 
+def _operations_overlapping(conn, start: str, end: str) -> list:
+    """Operation rows whose inclusive range overlaps [start, end].
+
+    Guarded because weekplan is imported by standalone scripts (migrate.py,
+    check_db.py) that never call init_operations_db()."""
+    try:
+        return conn.execute(
+            """SELECT * FROM operations WHERE start_date<=? AND end_date>=?
+               ORDER BY start_date, created_at""",
+            (end, start),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+
+def _operation_id_for_date(conn, date_str: str):
+    """The id of the Operation covering date_str, or None. First match wins if
+    two Operations overlap."""
+    rows = _operations_overlapping(conn, date_str, date_str)
+    return rows[0]["id"] if rows else None
+
+
+def _task_date(week_monday: str, section: str):
+    """The calendar date a tasks row sits on, or None for the undated
+    Scratchpad/Someday sections."""
+    if section not in DAY_NAMES:
+        return None
+    return (date.fromisoformat(week_monday)
+            + timedelta(days=DAY_NAMES.index(section))).isoformat()
+
+
 def _row_to_task(row, section_idx: int) -> dict:
     return {
         "type":        "task",
@@ -235,6 +267,7 @@ def _row_to_task(row, section_idx: int) -> dict:
         "steps":       json.loads(row["steps"]) if row["steps"] else [],
         "color":       row["color"],
         "block_id":    row["block_id"],
+        "operation_id": row["operation_id"],
     }
 
 
@@ -492,6 +525,8 @@ def get_or_create_week(date_str: str) -> dict:
             (week_monday,),
         ).fetchall()
 
+        op_rows = _operations_overlapping(conn, week_monday, sunday.isoformat())
+
     by_section = {s: [] for s in DAY_NAMES}
     for row in rows:
         if row["section"] in by_section:
@@ -507,6 +542,28 @@ def get_or_create_week(date_str: str) -> dict:
     today = date.today()
     week_num = monday.isocalendar()[1]
 
+    today_iso = today.isoformat()
+    operations = []
+    op_id_by_date = {}
+    for row in op_rows:
+        op_dates = []
+        d = date.fromisoformat(row["start_date"])
+        end = date.fromisoformat(row["end_date"])
+        while d <= end:
+            iso = d.isoformat()
+            op_dates.append(iso)
+            # First Operation wins a day if two happen to overlap.
+            op_id_by_date.setdefault(iso, row["id"])
+            d += timedelta(days=1)
+        operations.append({
+            "id":          row["id"],
+            "name":        row["name"],
+            "start_date":  row["start_date"],
+            "end_date":    row["end_date"],
+            "day_count":   len(op_dates),
+            "today_index": op_dates.index(today_iso) + 1 if today_iso in op_dates else None,
+        })
+
     days = []
     for i, name in enumerate(DAY_NAMES):
         d = monday + timedelta(days=i)
@@ -516,6 +573,7 @@ def get_or_create_week(date_str: str) -> dict:
             "date_num": d.day,
             "date_str": d.isoformat(),
             "is_today": d == today,
+            "operation_id": op_id_by_date.get(d.isoformat()),
             "items":    indexed[name],
         })
 
@@ -536,13 +594,15 @@ def get_or_create_week(date_str: str) -> dict:
         "someday":     someday_indexed,
         "scratchpad":  scratchpad_indexed,
         "recurring":   load_recurring(),
+        "operations":  operations,
     }
 
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────
 
 def add_task(date_str: str, section: str, text: str,
-             recur: str = None, note: str = None, source: str = None) -> dict:
+             recur: str = None, note: str = None, source: str = None,
+             operation_id: str = None) -> dict:
     if section not in SECTIONS:
         return {"error": f"Invalid section: {section}"}
     text = text.strip()
@@ -558,10 +618,11 @@ def add_task(date_str: str, section: str, text: str,
         conn.execute(
             """INSERT INTO tasks
                (id, week_monday, section, position, text, checked,
-                recur, attachment, note, created_at, source)
-               VALUES (?,?,?,?,?,0,?,NULL,?,?,?)""",
+                recur, attachment, note, created_at, source, operation_id)
+               VALUES (?,?,?,?,?,0,?,NULL,?,?,?,?)""",
             (str(uuid.uuid4()), week_monday, section, max_pos + 1,
-             text, recur or None, note.strip() if note else None, now, source),
+             text, recur or None, note.strip() if note else None, now, source,
+             operation_id or None),
         )
     return {"status": "saved"}
 
@@ -823,6 +884,15 @@ def defer_task(date_str: str, section: str, section_idx: int, defer_to: str) -> 
             "UPDATE tasks SET week_monday=?, section=?, position=?, checked=0 WHERE id=?",
             (target_monday, target_section, max_pos + 1, task["id"]),
         )
+        # An operation_id only means anything on a date the Operation covers.
+        if task["operation_id"]:
+            dest = _task_date(target_monday, target_section)
+            covered = dest and conn.execute(
+                "SELECT 1 FROM operations WHERE id=? AND start_date<=? AND end_date>=?",
+                (task["operation_id"], dest, dest),
+            ).fetchone()
+            if not covered:
+                conn.execute("UPDATE tasks SET operation_id=NULL WHERE id=?", (task["id"],))
         _normalize_positions(conn, week_monday, section)
         _normalize_positions(conn, target_monday, target_section)
 
@@ -876,10 +946,11 @@ def duplicate_task(date_str: str, section: str, section_idx: int) -> dict:
         conn.execute(
             """INSERT INTO tasks
                (id, week_monday, section, position, text, checked,
-                recur, attachment, note, created_at, block_id)
-               VALUES (?,?,?,?,?,0,?,?,?,?,?)""",
+                recur, attachment, note, created_at, block_id, operation_id)
+               VALUES (?,?,?,?,?,0,?,?,?,?,?,?)""",
             (str(uuid.uuid4()), week_monday, section, task["position"] + 1,
-             task["text"], task["recur"], task["attachment"], task["note"], now, task["block_id"]),
+             task["text"], task["recur"], task["attachment"], task["note"], now,
+             task["block_id"], task["operation_id"]),
         )
         _normalize_positions(conn, week_monday, section)
     return {"status": "saved"}
@@ -935,6 +1006,35 @@ def set_task_block(date_str: str, section: str, section_idx: int, block_id: str)
         if not task:
             return {"error": "Task not found"}
         conn.execute("UPDATE tasks SET block_id=? WHERE id=?", (block_id or None, task["id"]))
+    return {"status": "saved"}
+
+
+def set_task_operation(date_str: str, section: str, section_idx: int, operation_id: str) -> dict:
+    """Tag/untag a task as part of an Operation. The task does not move — the
+    tag only decides whether it survives the tunnel-vision filter on the
+    Operation's day columns. operation_id=None clears the tag.
+
+    Only dated day tasks can be tagged: Scratchpad and Someday have no
+    calendar date, so no Operation can ever cover them."""
+    if section not in SECTIONS:
+        return {"error": "Invalid section"}
+    week_monday = _get_monday(date_str)
+    with get_db() as conn:
+        task = _get_task_by_idx(conn, week_monday, section, section_idx)
+        if not task:
+            return {"error": "Task not found"}
+        if operation_id:
+            if section not in DAY_NAMES:
+                return {"error": "Only day tasks can join an Operation"}
+            task_date = _task_date(week_monday, section)
+            op = conn.execute(
+                "SELECT 1 FROM operations WHERE id=? AND start_date<=? AND end_date>=?",
+                (operation_id, task_date, task_date),
+            ).fetchone()
+            if not op:
+                return {"error": "That Operation does not cover this day"}
+        conn.execute("UPDATE tasks SET operation_id=? WHERE id=?",
+                     (operation_id or None, task["id"]))
     return {"status": "saved"}
 
 

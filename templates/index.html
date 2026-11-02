@@ -13,6 +13,7 @@
 <div class="page-header">
     <div class="page-header-right">
         <button class="logout-btn" id="toggle-done-btn" title="Hide/show done">&#10003;</button>
+        <button class="logout-btn" id="operations-btn" title="Operations" onclick="openOperationsModal()">&#9678;</button>
         <button class="logout-btn" id="recurring-btn" title="Recurring" onclick="openRecurringModal()">&#8734;</button>
         <button class="logout-btn" id="birthday-btn" title="Birthdays" onclick="openBirthdayModal()">&#127874;</button>
         <button class="logout-btn" id="blocks-btn" title="Time Blocks" onclick="toggleBlocksView()"><img src="/static/icons/lego-brick.svg" class="icon-lego icon-lego-btn" alt="Time Blocks"></button>
@@ -24,6 +25,11 @@
         Athena
     </h1>
     <span class="week-num-label" style="display:block;margin-top:3px">{{ build_time }}</span>
+</div>
+
+<!-- Operation marquee — scrolling alert band for any Operation covering this week -->
+<div id="wp-op-marquee" style="display:none">
+    <div class="wp-op-marquee-track" id="wp-op-marquee-track"></div>
 </div>
 
 <!-- Week navigation -->
@@ -122,6 +128,11 @@
             <button class="wp-card-pill" data-defer="next_week">Next week</button>
             <button class="wp-card-pill" data-defer="someday">Someday</button>
         </div>
+    </div>
+
+    <div class="wp-card-section" id="wp-card-op-section" style="display:none">
+        <div class="wp-card-label">Operation</div>
+        <div class="wp-card-pills" id="wp-card-op-pills"></div>
     </div>
 
     <div class="wp-card-section" id="wp-card-block-section">
@@ -254,6 +265,42 @@
 </div>
 
 <!-- Recurring Manager modal -->
+<div id="operations-modal">
+    <div class="rcr-modal-header">
+        <h2>&#9678; Operations</h2>
+        <button class="rcr-modal-close" onclick="closeOperationsModal()">&#10005;</button>
+    </div>
+    <div class="rcr-add-form">
+        <input id="op-add-name" type="text" placeholder="Operation name" autocomplete="off">
+        <span class="wp-custom-recur-label">from</span>
+        <input id="op-add-start" type="date">
+        <span class="wp-custom-recur-label">to</span>
+        <input id="op-add-end" type="date">
+        <button class="rcr-add-btn" onclick="submitAddOperation()">+ Launch</button>
+        <span id="op-add-status"></span>
+    </div>
+    <div class="op-modal-hint">
+        While an Operation runs, the days it covers hide recurring tasks and
+        anything not filed into it &mdash; nothing is deleted, it all comes back
+        when the Operation ends.
+    </div>
+    <div class="rcr-table-wrap">
+        <table class="rcr-table">
+            <thead>
+                <tr>
+                    <th>Operation</th>
+                    <th>Days</th>
+                    <th>Span</th>
+                    <th>Tasks</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="op-tbody"></tbody>
+        </table>
+    </div>
+</div>
+
 <div id="recurring-modal">
     <div class="rcr-modal-header">
         <h2>&#8734; Recurring</h2>
@@ -430,6 +477,12 @@ let cardTitleOriginal = '';
 let somedaySortable = null;
 let scratchpadSortable = null;
 
+// Operations: tunnel-vision focus modes pinned to a date range.
+let lastWeekData = null;          // last week payload, for re-render without refetch
+let cachedOperations = [];        // Operations manager list
+let opById = {};                  // id -> operation, for the week on screen
+const opRevealed = new Set();     // dates temporarily taken out of tunnel vision
+
 const COLLAPSED_KEY = 'athena-collapsed-days';
 const SOMEDAY_COLLAPSED_KEY = 'athena-someday-collapsed';
 const SCRATCHPAD_COLLAPSED_KEY = 'athena-scratchpad-collapsed';
@@ -547,7 +600,12 @@ function renderWeek(data) {
     const savedCard = activeCard;
     activeCard = null;
     currentWeekMonday = data.monday;
+    lastWeekData = data;
     const prefixColorMap = buildPrefixColorMap(data);
+
+    opById = {};
+    (data.operations || []).forEach(op => { opById[op.id] = op; });
+    renderOpMarquee(data);
 
     document.getElementById('week-dates').textContent = data.header;
     document.getElementById('week-num-label').textContent = `WEEK ${data.week_num}`;
@@ -556,8 +614,14 @@ function renderWeek(data) {
     grid.innerHTML = '';
 
     data.days.forEach(day => {
+        const op = day.operation_id ? opById[day.operation_id] : null;
+        // Tunnel vision: an Operation day shows only the tasks filed into it,
+        // unless this day has been temporarily revealed.
+        const tunnel = !!op && !opRevealed.has(day.date_str);
+
         const col = document.createElement('div');
-        col.className = 'day-col' + (day.is_today ? ' today' : '');
+        col.className = 'day-col' + (day.is_today ? ' today' : '')
+                      + (op ? ' op-day' : '') + (tunnel ? ' op-tunnel' : '');
         col.dataset.day = day.name;
 
         col.innerHTML = `<div class="day-header">
@@ -567,6 +631,16 @@ function renderWeek(data) {
                 <button class="wp-day-eye" data-day="${day.name}" title="Hide/show">&#9900;</button>
             </span>
         </div>`;
+
+        if (op) {
+            const opBar = document.createElement('div');
+            opBar.className = 'day-op-bar';
+            const dayNo = opDayNumber(op, day.date_str);
+            opBar.innerHTML = `<span class="day-op-bar-name">${esc(op.name)}</span>`
+                            + `<span class="day-op-bar-day">${dayNo}/${op.day_count}</span>`;
+            opBar.title = `Operation: ${op.name} (${op.start_date} \u2192 ${op.end_date})`;
+            col.appendChild(opBar);
+        }
 
         col.querySelector('.wp-day-eye').addEventListener('click', e => {
             e.stopPropagation();
@@ -578,23 +652,57 @@ function renderWeek(data) {
         tasksDiv.dataset.section = day.name;
         tasksDiv.dataset.date = day.date_str;
 
-        data.recurring.forEach(text => {
-            const item = document.createElement('div');
-            item.className = 'wp-recurring-item';
-            item.innerHTML = `<span class="wp-recurring-icon">&#8635;</span>
-                              <span class="wp-recurring-text">${esc(text)}</span>`;
-            tasksDiv.appendChild(item);
-        });
+        // The global recurring ghosts are part of the daily noise an Operation mutes.
+        if (!tunnel) {
+            data.recurring.forEach(text => {
+                const item = document.createElement('div');
+                item.className = 'wp-recurring-item';
+                item.innerHTML = `<span class="wp-recurring-icon">&#8635;</span>
+                                  <span class="wp-recurring-text">${esc(text)}</span>`;
+                tasksDiv.appendChild(item);
+            });
 
-        if (data.recurring.length > 0) {
-            const sep = document.createElement('div');
-            sep.className = 'wp-task-sep';
-            tasksDiv.appendChild(sep);
+            if (data.recurring.length > 0) {
+                const sep = document.createElement('div');
+                sep.className = 'wp-task-sep';
+                tasksDiv.appendChild(sep);
+            }
         }
 
-        day.items.forEach(task => {
+        const visibleItems = tunnel
+            ? day.items.filter(t => t.operation_id === op.id)
+            : day.items;
+        const hiddenCount = day.items.length - visibleItems.length;
+
+        visibleItems.forEach(task => {
             tasksDiv.appendChild(makeTaskEl(task, day.date_str, day.name, prefixColorMap));
         });
+
+        if (tunnel && (hiddenCount > 0 || data.recurring.length > 0)) {
+            const chip = document.createElement('button');
+            chip.className = 'day-op-reveal';
+            const bits = [];
+            if (hiddenCount > 0) bits.push(`${hiddenCount} task${hiddenCount === 1 ? '' : 's'}`);
+            if (data.recurring.length > 0) bits.push('recurring');
+            chip.textContent = `+ ${bits.join(' + ')} hidden`;
+            chip.title = 'Show what this Operation is muting';
+            chip.addEventListener('click', e => {
+                e.stopPropagation();
+                opRevealed.add(day.date_str);
+                renderWeek(lastWeekData);
+            });
+            tasksDiv.appendChild(chip);
+        } else if (op && !tunnel) {
+            const chip = document.createElement('button');
+            chip.className = 'day-op-reveal revealed';
+            chip.textContent = '\u2013 back to Operation only';
+            chip.addEventListener('click', e => {
+                e.stopPropagation();
+                opRevealed.delete(day.date_str);
+                renderWeek(lastWeekData);
+            });
+            tasksDiv.appendChild(chip);
+        }
 
         col.appendChild(tasksDiv);
 
@@ -798,10 +906,15 @@ function initSortables(mondayStr) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ date: srcDate, section: srcSection, section_idx: srcSectionIdx }),
             });
+            // The tag follows the destination day: dragging into an Operation
+            // day files the task in, dragging out drops it.
+            const dstOpId = operationIdForDate(dstDate, dstSection);
             await fetchApi('/api/week/task', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ date: dstDate, section: dstSection, text, note: note || undefined }),
+                body: JSON.stringify({ date: dstDate, section: dstSection, text,
+                                       note: note || undefined,
+                                       operation_id: dstOpId || undefined }),
             });
             const dstTexts = Array.from(toEl.querySelectorAll('.wp-task-item')).map(el => el.dataset.text);
             await fetchApi('/api/week/reorder', {
@@ -864,10 +977,14 @@ async function handleAddTaskDirect(input, section, dateStr, advanceFocus) {
     input.value = '';
     input.disabled = true;
     try {
+        // A task typed into an Operation day is Operation work — file it in,
+        // otherwise it would vanish behind the tunnel-vision filter.
+        const opId = operationIdForDate(dateStr, section);
         await fetchApi('/api/week/task', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ date: dateStr, section, text }),
+            body: JSON.stringify({ date: dateStr, section, text,
+                                   operation_id: opId || undefined }),
         });
         await loadWeek(currentWeekMonday);
         const sameInput = section === 'Someday'
@@ -1028,6 +1145,7 @@ function openCardPanel(task) {
         steps: task.steps ? JSON.parse(JSON.stringify(task.steps)) : [],
         color: task.color || null,
         block_id: task.block_id || null,
+        operation_id: task.operation_id || null,
     };
 
     const titleEl = document.getElementById('wp-card-title');
@@ -1067,6 +1185,7 @@ function openCardPanel(task) {
     loadBindingOptions();
     renderColorSwatches();
     renderCardBlockPills();
+    renderCardOpPills();
 }
 
 async function saveCardTitle() {
@@ -1949,6 +2068,281 @@ document.getElementById('rcr-add-recur').addEventListener('change', function() {
     if (isDaily) sectionEl.value = 'Monday';
     const wrap = document.getElementById('rcr-day-wrap');
     wrap.style.display = rcrIsMonthly(recur) ? 'flex' : 'none';
+});
+
+// ── Operations ───────────────────────────────────────────────────────────────
+// A named campaign pinned to a date range. The days it covers drop into tunnel
+// vision (recurring + untagged tasks hidden) and a scrolling alert band names
+// the Operation across the top of the week.
+
+function opDayNumber(op, dateStr) {
+    const start = new Date(op.start_date + 'T00:00:00');
+    const d = new Date(dateStr + 'T00:00:00');
+    return Math.round((d - start) / 86400000) + 1;
+}
+
+function operationIdForDate(dateStr, section) {
+    // Only dated day columns can belong to an Operation — Scratchpad and
+    // Someday have no calendar date, so nothing can cover them.
+    if (section === 'Someday' || section === 'Scratchpad') return null;
+    const day = (lastWeekData?.days || []).find(d => d.date_str === dateStr);
+    return day?.operation_id || null;
+}
+
+function fmtOpSpan(op) {
+    const f = iso => {
+        const d = new Date(iso + 'T00:00:00');
+        return `${BDAY_MONTHS[d.getMonth()]} ${d.getDate()}`;
+    };
+    return op.start_date === op.end_date ? f(op.start_date)
+                                         : `${f(op.start_date)}–${f(op.end_date)}`;
+}
+
+function renderOpMarquee(data) {
+    const bar = document.getElementById('wp-op-marquee');
+    const track = document.getElementById('wp-op-marquee-track');
+    if (!bar || !track) return;
+
+    const ops = data.operations || [];
+    if (ops.length === 0) {
+        bar.style.display = 'none';
+        track.innerHTML = '';
+        return;
+    }
+
+    const segs = ops.map(op => {
+        const meta = op.today_index
+            ? `Day ${op.today_index} of ${op.day_count}`
+            : `${fmtOpSpan(op)} · ${op.day_count} day${op.day_count === 1 ? '' : 's'}`;
+        return `<span class="wp-op-seg">`
+             + `<span class="wp-op-seg-icon">◆</span>`
+             + `<span class="wp-op-seg-name">Operation: ${esc(op.name)}</span>`
+             + `<span class="wp-op-seg-meta">${esc(meta)}</span>`
+             + `</span>`;
+    }).join('');
+
+    // Repeat until one half comfortably overflows the viewport, then duplicate
+    // it so translateX(-50%) loops seamlessly.
+    bar.style.display = 'block';
+    let half = segs;
+    track.style.animation = 'none';
+    track.innerHTML = half;
+    let guard = 0;
+    while (track.scrollWidth < window.innerWidth * 1.5 && guard++ < 12) {
+        half += segs;
+        track.innerHTML = half;
+    }
+    const halfWidth = track.scrollWidth;
+    track.innerHTML = half + half;
+    track.style.animation = '';
+    track.style.animationDuration = Math.max(10, halfWidth / 70) + 's';
+}
+
+// ── Card panel: file a task into an Operation ───────────────────────────────
+
+function renderCardOpPills() {
+    const section = document.getElementById('wp-card-op-section');
+    const pillsEl = document.getElementById('wp-card-op-pills');
+    if (!section || !pillsEl) return;
+
+    const ops = lastWeekData?.operations || [];
+    // Only offer Operations that actually cover this task's day.
+    const covering = activeCard && !activeCard.is_someday
+        ? ops.filter(op => activeCard.date_str >= op.start_date
+                        && activeCard.date_str <= op.end_date)
+        : [];
+    if (covering.length === 0) {
+        section.style.display = 'none';
+        pillsEl.innerHTML = '';
+        return;
+    }
+
+    section.style.display = '';
+    pillsEl.innerHTML = '';
+
+    const none = document.createElement('button');
+    none.className = 'wp-card-pill' + (activeCard.operation_id ? '' : ' active');
+    none.textContent = 'Not in Operation';
+    none.dataset.opValue = '';
+    pillsEl.appendChild(none);
+
+    covering.forEach(op => {
+        const btn = document.createElement('button');
+        btn.className = 'wp-card-pill'
+                      + (activeCard.operation_id === op.id ? ' active' : '');
+        btn.innerHTML = `<span class="wp-op-pill-icon">◆</span> ${esc(op.name)}`;
+        btn.dataset.opValue = op.id;
+        pillsEl.appendChild(btn);
+    });
+}
+
+document.getElementById('wp-card-op-pills').addEventListener('click', async function (e) {
+    const btn = e.target.closest('[data-op-value]');
+    if (!btn || !activeCard) return;
+    const opValue = btn.dataset.opValue;
+    const next = activeCard.operation_id === opValue ? '' : opValue;
+    await saveCardChanges();
+    if (!activeCard) return;
+    const res = await fetchApi('/api/week/operation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            date: activeCard.date_str,
+            section: activeCard.section,
+            section_idx: activeCard.section_idx,
+            operation_id: next || null,
+        }),
+    });
+    if (res && !res.ok) {
+        const err = await res.json().catch(() => ({}));
+        if (err.error) { alert(err.error); return; }
+    }
+    activeCard.operation_id = next || null;
+    // Untagging on a day that is still in tunnel vision hides the task
+    // immediately, which would strand the card panel over something you can no
+    // longer see. If the day has been revealed, the task stays put.
+    const stillHidden = !next && !opRevealed.has(activeCard.date_str);
+    if (stillHidden) await closeCardPanel();
+    loadWeek(currentWeekMonday);
+});
+
+// ── Operations manager modal ────────────────────────────────────────────────
+
+function openOperationsModal() {
+    document.getElementById('operations-modal').classList.add('open');
+    const start = document.getElementById('op-add-start');
+    const end = document.getElementById('op-add-end');
+    if (!start.value) start.value = todayStr();
+    if (!end.value) end.value = todayStr();
+    loadOperations();
+    document.getElementById('op-add-name').focus();
+}
+
+function closeOperationsModal() {
+    document.getElementById('operations-modal').classList.remove('open');
+    document.getElementById('op-add-status').textContent = '';
+}
+
+async function fetchOperationsList() {
+    const res = await fetchApi('/api/operations');
+    if (!res || !res.ok) return [];
+    cachedOperations = await res.json();
+    return cachedOperations;
+}
+
+async function loadOperations() {
+    const ops = await fetchOperationsList();
+    const tbody = document.getElementById('op-tbody');
+    if (ops.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="op-empty">No Operations yet</td></tr>';
+        return;
+    }
+    tbody.innerHTML = ops.map(op => `
+        <tr>
+            <td><input class="op-name-input" data-op-id="${op.id}"
+                       value="${esc(op.name)}" autocomplete="off"></td>
+            <td class="op-cell-num">${op.day_count}</td>
+            <td class="op-cell-dates">
+                <input type="date" class="op-date-input" data-op-id="${op.id}"
+                       data-which="start" value="${op.start_date}">
+                <input type="date" class="op-date-input" data-op-id="${op.id}"
+                       data-which="end" value="${op.end_date}">
+            </td>
+            <td class="op-cell-num">${op.task_count}</td>
+            <td><span class="op-status op-status-${op.status}">${op.status}</span></td>
+            <td><button class="rcr-del-btn" data-del-op="${op.id}"
+                        title="Delete Operation">&#10005;</button></td>
+        </tr>`).join('');
+
+    tbody.querySelectorAll('.op-name-input').forEach(inp => {
+        inp.addEventListener('blur', () => renameOperation(inp.dataset.opId, inp.value));
+        inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+    });
+    tbody.querySelectorAll('.op-date-input').forEach(inp => {
+        inp.addEventListener('change', () => {
+            const row = inp.closest('tr');
+            const start = row.querySelector('[data-which="start"]').value;
+            const end = row.querySelector('[data-which="end"]').value;
+            setOperationDates(inp.dataset.opId, start, end);
+        });
+    });
+    tbody.querySelectorAll('[data-del-op]').forEach(btn => {
+        btn.addEventListener('click', () => deleteOperation(btn.dataset.delOp));
+    });
+}
+
+async function submitAddOperation() {
+    const nameEl = document.getElementById('op-add-name');
+    const statusEl = document.getElementById('op-add-status');
+    const name = nameEl.value.trim();
+    const start_date = document.getElementById('op-add-start').value;
+    const end_date = document.getElementById('op-add-end').value || start_date;
+    if (!name || !start_date) {
+        statusEl.textContent = 'Name and start date required';
+        return;
+    }
+    statusEl.textContent = '';
+    const res = await fetchApi('/api/operations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, start_date, end_date }),
+    });
+    if (!res) return;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { statusEl.textContent = data.error || 'Could not launch'; return; }
+    nameEl.value = '';
+    await loadOperations();
+    loadWeek(currentWeekMonday);
+}
+
+async function renameOperation(operationId, name) {
+    name = (name || '').trim();
+    const current = cachedOperations.find(o => o.id === operationId);
+    if (!name || (current && current.name === name)) { loadOperations(); return; }
+    await fetchApi('/api/operations/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation_id: operationId, name }),
+    });
+    await loadOperations();
+    loadWeek(currentWeekMonday);
+}
+
+async function setOperationDates(operationId, start_date, end_date) {
+    const res = await fetchApi('/api/operations/dates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation_id: operationId, start_date, end_date }),
+    });
+    if (res && !res.ok) {
+        const err = await res.json().catch(() => ({}));
+        document.getElementById('op-add-status').textContent = err.error || 'Could not re-range';
+    }
+    await loadOperations();
+    loadWeek(currentWeekMonday);
+}
+
+async function deleteOperation(operationId) {
+    const op = cachedOperations.find(o => o.id === operationId);
+    const tagged = op && op.task_count
+        ? `\n${op.task_count} task(s) will stay on their days, just untagged.`
+        : '';
+    if (!confirm(`Delete Operation "${op ? op.name : ''}"?${tagged}`)) return;
+    await fetchApi('/api/operations', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation_id: operationId }),
+    });
+    await loadOperations();
+    loadWeek(currentWeekMonday);
+}
+
+document.getElementById('op-add-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitAddOperation();
+});
+
+window.addEventListener('resize', () => {
+    if (lastWeekData) renderOpMarquee(lastWeekData);
 });
 
 // ── Time Blocks ─────────────────────────────────────────────────────────────

@@ -1732,3 +1732,224 @@ input[type="text"]:focus {
     }
 }
 
+
+/* ── Operations ──────────────────────────────────────────────────────────── */
+
+/* Scrolling alert band naming any Operation covering the week on screen */
+#wp-op-marquee {
+    position: relative;
+    overflow: hidden;
+    margin: 0 0 8px;
+    padding: 5px 0;
+    background: linear-gradient(180deg, #1a0f22 0%, #120a18 100%);
+    border-top: 1px solid var(--accent);
+    border-bottom: 1px solid var(--accent);
+    box-shadow: 0 0 14px rgba(185, 103, 255, 0.22) inset;
+    user-select: none;
+}
+
+/* Fade the text out into the edges rather than clipping it hard */
+#wp-op-marquee::before,
+#wp-op-marquee::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 36px;
+    z-index: 2;
+    pointer-events: none;
+}
+#wp-op-marquee::before { left: 0; background: linear-gradient(90deg, #120a18, transparent); }
+#wp-op-marquee::after { right: 0; background: linear-gradient(270deg, #120a18, transparent); }
+
+.wp-op-marquee-track {
+    display: flex;
+    width: max-content;
+    animation: wp-op-scroll 30s linear infinite;
+    will-change: transform;
+}
+
+@keyframes wp-op-scroll {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
+}
+
+/* Honour reduced-motion: keep the band, drop the scroll */
+@media (prefers-reduced-motion: reduce) {
+    .wp-op-marquee-track { animation: none; }
+}
+
+.wp-op-seg {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 22px;
+    white-space: nowrap;
+    font-size: 0.6875rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+}
+
+.wp-op-seg-icon { color: var(--accent); font-size: 0.5rem; }
+
+.wp-op-seg-name {
+    color: var(--accent);
+    font-weight: 700;
+    text-shadow: 0 0 10px rgba(185, 103, 255, 0.55);
+}
+
+.wp-op-seg-meta {
+    color: var(--text-secondary);
+    letter-spacing: 0.12em;
+}
+
+/* Day columns an Operation covers */
+.day-col.op-day {
+    border-color: rgba(185, 103, 255, 0.55);
+    background: linear-gradient(180deg, rgba(185, 103, 255, 0.07), transparent 140px), var(--bg-card);
+}
+
+.day-col.op-day .day-header .day-name { color: var(--accent); }
+
+.day-op-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 2px 7px;
+    background: rgba(185, 103, 255, 0.12);
+    border-bottom: 1px solid rgba(185, 103, 255, 0.3);
+    font-size: 0.5625rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    user-select: none;
+}
+
+.day-op-bar-name {
+    color: var(--accent);
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.day-op-bar-day { color: var(--text-secondary); flex-shrink: 0; }
+
+/* "+ N tasks + recurring hidden" / "back to Operation only" toggle */
+.day-op-reveal {
+    display: block;
+    width: calc(100% - 8px);
+    margin: 4px;
+    padding: 3px 5px;
+    background: transparent;
+    border: 1px dashed #2a2135;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.5625rem;
+    letter-spacing: 0.08em;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+}
+.day-op-reveal:hover { border-color: var(--accent); color: var(--accent); }
+.day-op-reveal.revealed { border-style: solid; border-color: rgba(185, 103, 255, 0.4); }
+
+.wp-op-pill-icon { font-size: 0.5rem; color: var(--accent); }
+
+@media (max-width: 819px) {
+    .day-col.op-day {
+        border-top-color: var(--accent);
+        background: transparent;
+    }
+    .day-op-bar { margin: 0 8px; }
+    .day-op-reveal { width: calc(100% - 16px); margin: 4px 8px; }
+}
+
+/* ── Operations manager modal ───────────────────────────────────────────── */
+
+#operations-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 2001;
+    background: rgba(0, 0, 0, 0.92);
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+}
+#operations-modal.open { display: flex; }
+
+.rcr-add-form input[type="date"] {
+    background: #111;
+    border: 1px solid #333;
+    color: #e0e0e0;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    padding: 4px 6px;
+    outline: none;
+    border-radius: 2px;
+}
+.rcr-add-form input[type="date"]:focus { border-color: var(--accent); }
+
+#op-add-name { flex: 2; min-width: 140px; }
+
+#op-add-status { font-size: 0.7rem; color: #ff6b6b; }
+
+.op-modal-hint {
+    padding: 8px 18px;
+    border-bottom: 1px solid #1e1e2e;
+    font-size: 0.6875rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.op-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.op-name-input {
+    width: 100%;
+    min-width: 100px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 3px 5px;
+    outline: none;
+}
+.op-name-input:hover { border-color: #2a2a3a; }
+.op-name-input:focus { border-color: var(--accent); background: #111; }
+
+.op-cell-num { text-align: center; color: var(--text-secondary); }
+
+.op-cell-dates { display: flex; gap: 4px; flex-wrap: wrap; }
+
+.op-date-input {
+    background: #111;
+    border: 1px solid #2a2a3a;
+    color: #ccc;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    padding: 2px 4px;
+    outline: none;
+    border-radius: 2px;
+}
+.op-date-input:focus { border-color: var(--accent); }
+
+.op-status {
+    display: inline-block;
+    padding: 1px 7px;
+    border: 1px solid currentColor;
+    font-size: 0.5625rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border-radius: 2px;
+}
+.op-status-active   { color: #44cc66; }
+.op-status-upcoming { color: var(--accent); }
+.op-status-past     { color: var(--text-secondary); }
